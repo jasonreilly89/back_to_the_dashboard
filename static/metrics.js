@@ -1,5 +1,27 @@
 let chart;
 let timer;
+let glossary = {};
+
+function loadGlossary() {
+  fetch(GLOSSARY_URL)
+    .then(resp => resp.json())
+    .then(data => {
+      glossary = data;
+      applyTooltips();
+    })
+    .catch(err => console.error('Failed to load glossary', err));
+}
+
+function applyTooltips() {
+  document.querySelectorAll('[data-term]').forEach(el => {
+    const term = el.getAttribute('data-term');
+    if (glossary[term]) {
+      el.setAttribute('title', glossary[term]);
+    }
+  });
+}
+
+loadGlossary();
 
 function buildChart(data) {
   const ctx = document.getElementById('metricsChart').getContext('2d');
