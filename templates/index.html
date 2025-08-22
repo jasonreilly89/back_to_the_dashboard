@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Training Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>Training PRAUC</h1>
+  <canvas id="praucChart"></canvas>
+  <script>
+    let chart;
+    async function fetchData() {
+      const res = await fetch('/data');
+      return await res.json();
+    }
+    async function updateChart() {
+      const data = await fetchData();
+      const labels = data.map(d => `${d.date} ep${d.epoch}`);
+      const prauc = data.map(d => d.prauc);
+      if (!chart) {
+        const ctx = document.getElementById('praucChart').getContext('2d');
+        chart = new Chart(ctx, {
+          type: 'line',
+          data: { labels, datasets: [{ label: 'PRAUC', data: prauc, borderColor: 'blue' }] },
+          options: { scales: { y: { beginAtZero: true, max: 1 } } }
+        });
+      } else {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = prauc;
+        chart.update();
+      }
+    }
+    setInterval(updateChart, 5000);
+    updateChart();
+  </script>
+</body>
+</html>
