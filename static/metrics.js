@@ -48,8 +48,8 @@ function buildChart(data) {
   };
   if (chart) {
     chart.data.labels = labels;
-    chart.data.datasets[0] = apDataset;
-    chart.data.datasets[1] = prevDataset;
+    chart.data.datasets[0].data = apDataset.data;
+    chart.data.datasets[1].data = prevDataset.data;
     chart.update();
   } else {
     chart = new Chart(ctx, {
@@ -57,6 +57,10 @@ function buildChart(data) {
       data: {labels, datasets: [apDataset, prevDataset]},
       options: {
         responsive: true,
+        animation: {
+          duration: 300,
+          easing: 'linear'
+        },
         scales: { y: {min: 0, max: 1} },
         plugins: {
           tooltip: {
