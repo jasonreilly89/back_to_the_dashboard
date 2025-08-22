@@ -1,6 +1,9 @@
 let chart;
 let timer;
 let glossary = {};
+let allRows = [];
+let currentPage = 1;
+const PAGE_SIZE = 20;
 
 function loadGlossary() {
   fetch(GLOSSARY_URL)
@@ -99,6 +102,67 @@ function populateTable(data) {
   }
 }
 
+function renderPagination() {
+  const totalPages = Math.ceil(allRows.length / PAGE_SIZE) || 1;
+  const pagination = document.getElementById('pagination');
+  pagination.innerHTML = '';
+
+  const prevLi = document.createElement('li');
+  prevLi.className = 'page-item' + (currentPage === 1 ? ' disabled' : '');
+  const prevLink = document.createElement('a');
+  prevLink.className = 'page-link';
+  prevLink.href = '#';
+  prevLink.textContent = 'Previous';
+  prevLink.addEventListener('click', e => {
+    e.preventDefault();
+    if (currentPage > 1) {
+      currentPage--;
+      renderTable();
+    }
+  });
+  prevLi.appendChild(prevLink);
+  pagination.appendChild(prevLi);
+
+  for (let i = 1; i <= totalPages; i++) {
+    const li = document.createElement('li');
+    li.className = 'page-item' + (i === currentPage ? ' active' : '');
+    const a = document.createElement('a');
+    a.className = 'page-link';
+    a.href = '#';
+    a.textContent = i;
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      currentPage = i;
+      renderTable();
+    });
+    li.appendChild(a);
+    pagination.appendChild(li);
+  }
+
+  const nextLi = document.createElement('li');
+  nextLi.className = 'page-item' + (currentPage === totalPages ? ' disabled' : '');
+  const nextLink = document.createElement('a');
+  nextLink.className = 'page-link';
+  nextLink.href = '#';
+  nextLink.textContent = 'Next';
+  nextLink.addEventListener('click', e => {
+    e.preventDefault();
+    if (currentPage < totalPages) {
+      currentPage++;
+      renderTable();
+    }
+  });
+  nextLi.appendChild(nextLink);
+  pagination.appendChild(nextLi);
+}
+
+function renderTable() {
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageData = allRows.slice(start, start + PAGE_SIZE);
+  populateTable(pageData);
+  renderPagination();
+}
+
 function updateKpis(summary) {
   document.getElementById('kpiMean').textContent = summary.ap_micro_mean.toFixed(4);
   document.getElementById('kpiMedian').textContent = summary.ap_micro_median.toFixed(4);
@@ -133,8 +197,10 @@ function fetchMetrics() {
       if (endDay) {
         rows = rows.filter(r => r.day <= endDay);
       }
-      buildChart(rows);
-      populateTable(rows);
+      allRows = rows;
+      currentPage = 1;
+      buildChart(allRows);
+      renderTable();
       updateKpis(data.summary);
     })
     .catch(err => {
