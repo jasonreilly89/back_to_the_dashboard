@@ -42,9 +42,9 @@
       </form>
 
       <div class="row mb-4 text-center" id="kpis">
-        <div class="col"><div class="kpi"><span id="kpiMean">0</span><br>mean APμ</div></div>
-        <div class="col"><div class="kpi"><span id="kpiMedian">0</span><br>median APμ</div></div>
-        <div class="col"><div class="kpi"><span id="kpiPrev">0</span><br>mean Prevμ</div></div>
+        <div class="col"><div class="kpi"><span id="kpiMean">0</span><br>mean <span data-term="APμ">APμ</span></div></div>
+        <div class="col"><div class="kpi"><span id="kpiMedian">0</span><br>median <span data-term="APμ">APμ</span></div></div>
+        <div class="col"><div class="kpi"><span id="kpiPrev">0</span><br>mean <span data-term="prevμ">Prevμ</span></div></div>
         <div class="col"><div class="kpi"><span id="kpiDays">0</span><br>days</div></div>
       </div>
 
@@ -57,19 +57,22 @@
             <tr>
               <th>Day</th>
               <th>Epoch</th>
-              <th>APμ</th>
-              <th>AP̄</th>
-              <th>Prevμ</th>
-              <th>Pos</th>
-              <th>Neg</th>
-              <th>TrainLoss</th>
+              <th data-term="APμ">APμ</th>
+              <th data-term="AP̄">AP̄</th>
+              <th data-term="prevμ">Prevμ</th>
+              <th data-term="pos">Pos</th>
+              <th data-term="neg">Neg</th>
+              <th data-term="loss">TrainLoss</th>
               <th>Time(s)</th>
             </tr>
           </thead>
           <tbody></tbody>
-        </table>
-      </div>
+          </table>
+        </div>
     </div>
+    <script>
+      const GLOSSARY_URL = "{{ url_for('static', filename='glossary.json') }}";
+    </script>
     <script src="{{ url_for('static', filename='metrics.js') }}"></script>
   </body>
 </html>
