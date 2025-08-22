@@ -9,7 +9,7 @@ LOG_FILE = Path("train.log")
 app = Flask(__name__)
 
 LOG_RE = re.compile(
-    r"\[val (\d+)\] ep (\d+) tr:loss=(\d+\.\d+) \| va:APμ=(\d+\.\d+) AP̄=(\d+\.\d+) F1̄=(\d+\.\d+) sel=prauc:(\d+\.\d+)"
+    r"\[val (\d+)\] ep (\d+) tr:loss=(\d+\.\d+) \| va:APμ=(\d+\.\d+) AP̄=(\d+\.\d+) F1̄=(\d+\.\d+)(?: prev=(\d+\.\d+))? sel=prauc:(\d+\.\d+)"
 )
 
 
@@ -22,7 +22,7 @@ def parse_logs():
         for line in f:
             m = LOG_RE.search(line)
             if m:
-                date, epoch, loss, ap_mu, ap_bar, f1_bar, prauc = m.groups()
+                date, epoch, loss, ap_mu, ap_bar, f1_bar, prevalence, prauc = m.groups()
                 entries.append(
                     {
                         "date": date,
@@ -31,6 +31,7 @@ def parse_logs():
                         "ap_mu": float(ap_mu),
                         "ap_bar": float(ap_bar),
                         "f1_bar": float(f1_bar),
+                        "prevalence": float(prevalence) if prevalence is not None else None,
                         "prauc": float(prauc),
                     }
                 )

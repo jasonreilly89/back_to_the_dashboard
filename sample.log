@@ -9,13 +9,13 @@
   --lr 1e-3 --grad_accum 2 --weight_decay 1e-4
 [cuda] using device 0: NVIDIA GeForce RTX 5090
 [amp] enabled=True dtype=torch.float32 device=cuda
-[val 20220105] ep 01 tr:loss=0.6596 | va:APμ=0.6367 AP̄=0.3606 F1̄=0.7351 sel=prauc:0.6367 (time=0.9s)
+[val 20220105] ep 01 tr:loss=0.6596 | va:APμ=0.6367 AP̄=0.3606 F1̄=0.7351 prev=0.02 sel=prauc:0.6367 (time=0.9s)
 [best-epoch] New best prauc=0.6367 -> /home/jason/ml/datasets/models/prepped_setup12_60_setup/model_val20220105.pt
-[val 20220105] ep 02 tr:loss=0.6174 | va:APμ=0.6347 AP̄=0.3593 F1̄=0.7351 sel=prauc:0.6347 (time=0.4s)
-[val 20220105] ep 03 tr:loss=0.5790 | va:APμ=0.6388 AP̄=0.3625 F1̄=0.7352 sel=prauc:0.6388 (time=0.3s)
+[val 20220105] ep 02 tr:loss=0.6174 | va:APμ=0.6347 AP̄=0.3593 F1̄=0.7351 prev=0.02 sel=prauc:0.6347 (time=0.4s)
+[val 20220105] ep 03 tr:loss=0.5790 | va:APμ=0.6388 AP̄=0.3625 F1̄=0.7352 prev=0.02 sel=prauc:0.6388 (time=0.3s)
 [best-epoch] New best prauc=0.6388 -> /home/jason/ml/datasets/models/prepped_setup12_60_setup/model_val20220105.pt
-[val 20220105] ep 04 tr:loss=0.5655 | va:APμ=0.6508 AP̄=0.3686 F1̄=0.7351 sel=prauc:0.6508 (time=0.3s)
+[val 20220105] ep 04 tr:loss=0.5655 | va:APμ=0.6508 AP̄=0.3686 F1̄=0.7351 prev=0.02 sel=prauc:0.6508 (time=0.3s)
 [best-epoch] New best prauc=0.6508 -> /home/jason/ml/datasets/models/prepped_setup12_60_setup/model_val20220105.pt
-[val 20220105] ep 05 tr:loss=0.5470 | va:APμ=0.6539 AP̄=0.3705 F1̄=0.7352 sel=prauc:0.6539 (time=0.3s)
+[val 20220105] ep 05 tr:loss=0.5470 | va:APμ=0.6539 AP̄=0.3705 F1̄=0.7352 prev=0.02 sel=prauc:0.6539 (time=0.3s)
 [best-epoch] New best prauc=0.6539 -> /home/jason/ml/datasets/models/prepped_setup12_60_setup/model_val20220105.pt
-[val 20220106] ep 01 tr:loss=0.5890 | va:APμ=0.2683 AP̄=0.2560 F1̄=0.3894 sel=prauc:0.2683 (time=0.8s)
+[val 20220106] ep 01 tr:loss=0.5890 | va:APμ=0.2683 AP̄=0.2560 F1̄=0.3894 prev=0.30 sel=prauc:0.2683 (time=0.8s)
