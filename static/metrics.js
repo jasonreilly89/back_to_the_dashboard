@@ -31,18 +31,18 @@ function buildChart(data) {
   const labels = data.map(r => r.day);
   const apDataset = {
     label: 'APμ',
-    data: data.map(r => ({x: r.day, y: r.ap_micro, pos_total: r.pos_total})),
+    data: data.map(r => ({ ...r, x: r.day, y: r.ap_micro })),
     parsing: false,
     tension: 0,
     borderColor: 'rgb(54, 162, 235)',
     backgroundColor: 'rgb(54, 162, 235)',
     pointRadius: 4,
-    pointBackgroundColor: ctx => ctx.raw.pos_total === 0 ? '#ffffff' : 'rgb(54,162,235)',
+    pointBackgroundColor: ctx => ctx.raw.eligible === false ? '#ffffff' : 'rgb(54,162,235)',
     pointBorderColor: 'rgb(54,162,235)',
   };
   const prevDataset = {
     label: 'Prevμ',
-    data: data.map(r => ({x: r.day, y: r.prev_micro})),
+    data: data.map(r => ({ ...r, x: r.day, y: r.prev_micro })),
     parsing: false,
     tension: 0,
     borderColor: 'rgb(255, 159, 64)',
@@ -70,10 +70,27 @@ function buildChart(data) {
             callbacks: {
               label: function(context) {
                 const val = context.parsed.y.toFixed(4);
-                if (context.raw.pos_total === 0) {
-                  return context.dataset.label + ': ' + val + ' (zero positives)';
+                let label = context.dataset.label + ': ' + val;
+                if (context.raw.eligible === false) {
+                  label += ' (ineligible)';
                 }
-                return context.dataset.label + ': ' + val;
+                return label;
+              },
+              afterBody: function(contexts) {
+                const r = contexts[0].raw;
+                const lines = [
+                  `APμ: ${r.ap_micro.toFixed(4)}`,
+                  `AP̄: ${r.ap_macro.toFixed(4)}`,
+                  `Prevμ: ${r.prev_micro.toFixed(4)}`,
+                  `Pos: ${r.pos_total}`,
+                  `Neg: ${r.neg_total}`,
+                  `TrainLoss: ${r.train_loss.toFixed(4)}`,
+                  `Time(s): ${r.time_s.toFixed(2)}`
+                ];
+                if (r.eligible === false) {
+                  lines.push('eligible: false');
+                }
+                return lines;
               }
             }
           }
@@ -91,6 +108,7 @@ function populateTable(data) {
     tr.innerHTML = `
       <td>${r.day}</td>
       <td>${r.epoch}</td>
+      <td>${r.eligible ? '' : '<span class="badge bg-secondary">ineligible</span>'}</td>
       <td>${r.ap_micro.toFixed(4)}</td>
       <td>${r.ap_macro.toFixed(4)}</td>
       <td>${r.prev_micro.toFixed(4)}</td>
@@ -193,13 +211,15 @@ function fetchMetrics() {
   fetch(url, {cache: 'no-store'})
     .then(resp => resp.json())
     .then(data => {
-      let rows = data.best_per_day;
+      let chartRows = data.rows;
+      let tableRows = data.best_per_day;
       if (endDay) {
-        rows = rows.filter(r => r.day <= endDay);
+        chartRows = chartRows.filter(r => r.day <= endDay);
+        tableRows = tableRows.filter(r => r.day <= endDay);
       }
-      allRows = rows;
+      buildChart(chartRows);
+      allRows = tableRows;
       currentPage = 1;
-      buildChart(allRows);
       renderTable();
       updateKpis(data.summary);
     })

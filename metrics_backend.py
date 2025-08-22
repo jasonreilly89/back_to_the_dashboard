@@ -74,6 +74,7 @@ def parse_metrics(limit: int, since_day: Optional[str]) -> List[Dict[str, Any]]:
             "prev_macro": float(obj.get("prev_macro", 0.0)),
             "pos_total": int(obj.get("pos_total", 0)),
             "neg_total": int(obj.get("neg_total", 0)),
+            "eligible": bool(obj.get("eligible", False)),
         }
         rows.append(row)
     rows.sort(key=lambda r: (r["day"], r["epoch"]))
@@ -81,8 +82,10 @@ def parse_metrics(limit: int, since_day: Optional[str]) -> List[Dict[str, Any]]:
 
 
 def aggregate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return best eligible row per day sorted by day."""
+    eligible_rows = [r for r in rows if r.get("eligible")]
     best: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
+    for r in eligible_rows:
         day = r["day"]
         if day not in best:
             best[day] = r
@@ -104,14 +107,25 @@ def compute_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "ap_micro_median": 0,
             "prev_micro_mean": 0,
         }
-    ap_values = [r["ap_micro"] for r in rows]
-    prev_values = [r["prev_micro"] for r in rows]
+    eligible_rows = [r for r in rows if r.get("eligible")]
+    if eligible_rows:
+        ap_values = [r["ap_micro"] for r in eligible_rows]
+        prev_values = [r["prev_micro"] for r in eligible_rows]
+        ap_mean = statistics.mean(ap_values)
+        ap_median = statistics.median(ap_values)
+        prev_mean = statistics.mean(prev_values) if prev_values else 0
+        days = len({r["day"] for r in eligible_rows})
+    else:
+        ap_mean = 0
+        ap_median = 0
+        prev_mean = 0
+        days = 0
     return {
         "count_rows": len(rows),
-        "days": len({r["day"] for r in rows}),
-        "ap_micro_mean": statistics.mean(ap_values),
-        "ap_micro_median": statistics.median(ap_values),
-        "prev_micro_mean": statistics.mean(prev_values) if prev_values else 0,
+        "days": days,
+        "ap_micro_mean": ap_mean,
+        "ap_micro_median": ap_median,
+        "prev_micro_mean": prev_mean,
     }
 
 
