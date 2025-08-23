@@ -51,28 +51,36 @@
       <canvas id="metricsChart" height="120"></canvas>
 
       <h2 class="mt-4">Best per day</h2>
-      <div class="table-responsive">
-        <table class="table table-sm table-striped" id="metricsTable">
-          <thead>
-            <tr>
-              <th>Day</th>
-              <th>Epoch</th>
-              <th>Status</th>
-              <th data-term="APμ">APμ</th>
-              <th data-term="AP̄">AP̄</th>
-              <th data-term="prevμ">Prevμ</th>
-              <th data-term="pos">Pos</th>
-              <th data-term="neg">Neg</th>
-              <th data-term="loss">TrainLoss</th>
-              <th>Time(s)</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-          </table>
+      <div class="row">
+        <div class="col-md-9">
+          <div class="table-responsive">
+            <table class="table table-sm table-striped" id="metricsTable">
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Epoch</th>
+                  <th>Status</th>
+                  <th data-term="APμ">APμ</th>
+                  <th data-term="AP̄">AP̄</th>
+                  <th data-term="prevμ">Prevμ</th>
+                  <th data-term="pos">Pos</th>
+                  <th data-term="neg">Neg</th>
+                  <th data-term="loss">TrainLoss</th>
+                  <th>Time(s)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+              </table>
+            </div>
+          <nav>
+            <ul class="pagination pagination-sm" id="pagination"></ul>
+          </nav>
         </div>
-      <nav>
-        <ul class="pagination pagination-sm" id="pagination"></ul>
-      </nav>
+        <div class="col-md-3">
+          <h5>Today's progress</h5>
+          <ul id="ticker" class="ticker list-unstyled"></ul>
+        </div>
+      </div>
     </div>
     <script>
       const GLOSSARY_URL = "{{ url_for('static', filename='glossary.json') }}";

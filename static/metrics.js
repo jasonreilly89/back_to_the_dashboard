@@ -188,6 +188,19 @@ function updateKpis(summary) {
   document.getElementById('kpiDays').textContent = summary.days;
 }
 
+function updateTicker(rows) {
+  const ticker = document.getElementById('ticker');
+  ticker.innerHTML = '';
+  if (!rows.length) return;
+  const latestDay = rows[rows.length - 1].day;
+  const dayRows = rows.filter(r => r.day === latestDay);
+  for (const r of dayRows) {
+    const li = document.createElement('li');
+    li.textContent = `ep${r.epoch}: APμ ${r.ap_micro.toFixed(4)}`;
+    ticker.appendChild(li);
+  }
+}
+
 function showError(msg) {
   const el = document.getElementById('error');
   el.textContent = msg;
@@ -225,6 +238,7 @@ function fetchMetrics() {
       currentPage = 1;
       renderTable();
       updateKpis(data.summary);
+      updateTicker(data.rows);
     })
     .catch(err => {
       showError('Failed to load metrics');
