@@ -5,3 +5,11 @@
   font-weight: bold;
   font-size: 1.25rem;
 }
+
+.ticker {
+  max-height: 400px;
+  overflow-y: auto;
+  border-left: 1px solid #dee2e6;
+  padding-left: 0.5rem;
+  font-size: 0.875rem;
+}
