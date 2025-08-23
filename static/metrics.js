@@ -211,7 +211,10 @@ function fetchMetrics() {
   fetch(url, {cache: 'no-store'})
     .then(resp => resp.json())
     .then(data => {
-      let chartRows = data.rows;
+      // Use aggregated rows for both the chart and table so the x-axis
+      // shows one point per day instead of multiple points stacked on
+      // the same day, which previously produced vertical lines.
+      let chartRows = data.best_per_day;
       let tableRows = data.best_per_day;
       if (endDay) {
         chartRows = chartRows.filter(r => r.day <= endDay);
