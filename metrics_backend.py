@@ -6,7 +6,7 @@ from typing import Iterable, List, Dict, Any, Optional
 
 from flask import Blueprint, jsonify, render_template, request
 
-DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/prepped_setup12_60_setup/metrics.jsonl"
+DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_highprev/metrics.jsonl"
 DEFAULT_TITLE = "Walk-Forward PRAUC"
 
 metrics_bp = Blueprint("metrics_bp", __name__)
