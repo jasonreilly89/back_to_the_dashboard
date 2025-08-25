@@ -49,15 +49,29 @@ function buildChart(data) {
     backgroundColor: 'rgb(255, 159, 64)',
     pointRadius: 4,
   };
+  const liftDataset = {
+    label: 'LiftAbs',
+    data: data.map(r => ({ ...r, x: r.day, y: r.lift_abs })),
+    parsing: false,
+    tension: 0,
+    borderColor: 'rgb(75, 192, 192)',
+    backgroundColor: 'rgb(75, 192, 192)',
+    pointRadius: 4,
+  };
   if (chart) {
     chart.data.labels = labels;
     chart.data.datasets[0].data = apDataset.data;
     chart.data.datasets[1].data = prevDataset.data;
+    if (chart.data.datasets.length < 3) {
+      chart.data.datasets.push(liftDataset);
+    } else {
+      chart.data.datasets[2].data = liftDataset.data;
+    }
     chart.update();
   } else {
     chart = new Chart(ctx, {
       type: 'line',
-      data: {labels, datasets: [apDataset, prevDataset]},
+      data: {labels, datasets: [apDataset, prevDataset, liftDataset]},
       options: {
         responsive: true,
         animation: {
@@ -82,6 +96,7 @@ function buildChart(data) {
                   `APμ: ${r.ap_micro.toFixed(4)}`,
                   `AP̄: ${r.ap_macro.toFixed(4)}`,
                   `Prevμ: ${r.prev_micro.toFixed(4)}`,
+                  `LiftAbs: ${r.lift_abs.toFixed(4)}`,
                   `Pos: ${r.pos_total}`,
                   `Neg: ${r.neg_total}`,
                   `TrainLoss: ${r.train_loss.toFixed(4)}`,
