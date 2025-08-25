@@ -1,4 +1,5 @@
 let chart;
+let liftChart;
 let timer;
 let glossary = {};
 let allRows = [];
@@ -28,10 +29,16 @@ loadGlossary();
 
 function buildChart(data) {
   const ctx = document.getElementById('metricsChart').getContext('2d');
+  const liftCtx = document.getElementById('liftChart').getContext('2d');
   const labels = data.map(r => r.day);
+
+  const apData = data.map(r => ({ ...r, x: r.day, y: r.ap_micro }));
+  const prevData = data.map(r => ({ ...r, x: r.day, y: r.prev_micro }));
+  const liftData = data.map(r => ({ ...r, x: r.day, y: r.ap_micro - r.prev_micro }));
+
   const apDataset = {
     label: 'APμ',
-    data: data.map(r => ({ ...r, x: r.day, y: r.ap_micro })),
+    data: apData,
     parsing: false,
     tension: 0,
     borderColor: 'rgb(54, 162, 235)',
@@ -39,46 +46,36 @@ function buildChart(data) {
     pointRadius: 4,
     pointBackgroundColor: ctx => ctx.raw.eligible === false ? '#ffffff' : 'rgb(54,162,235)',
     pointBorderColor: 'rgb(54,162,235)',
+    fill: { target: 'prev', above: 'rgba(75, 192, 192, 0.2)', below: 'rgba(192, 75, 75, 0.2)' }
   };
   const prevDataset = {
+    id: 'prev',
     label: 'Prevμ',
-    data: data.map(r => ({ ...r, x: r.day, y: r.prev_micro })),
+    data: prevData,
     parsing: false,
     tension: 0,
     borderColor: 'rgb(255, 159, 64)',
     backgroundColor: 'rgb(255, 159, 64)',
     pointRadius: 4,
+    fill: false,
   };
-  const liftDataset = {
-    label: 'LiftAbs',
-    data: data.map(r => ({ ...r, x: r.day, y: r.lift_abs })),
-    parsing: false,
-    tension: 0,
-    borderColor: 'rgb(75, 192, 192)',
-    backgroundColor: 'rgb(75, 192, 192)',
-    pointRadius: 4,
-  };
+
   if (chart) {
     chart.data.labels = labels;
-    chart.data.datasets[0].data = apDataset.data;
-    chart.data.datasets[1].data = prevDataset.data;
-    if (chart.data.datasets.length < 3) {
-      chart.data.datasets.push(liftDataset);
-    } else {
-      chart.data.datasets[2].data = liftDataset.data;
-    }
+    chart.data.datasets[0].data = apData;
+    chart.data.datasets[1].data = prevData;
     chart.update();
   } else {
     chart = new Chart(ctx, {
       type: 'line',
-      data: {labels, datasets: [apDataset, prevDataset, liftDataset]},
+      data: { labels, datasets: [apDataset, prevDataset] },
       options: {
         responsive: true,
         animation: {
           duration: 300,
           easing: 'linear'
         },
-        scales: { y: {min: 0, max: 1} },
+        scales: { y: { min: 0, max: 1 } },
         plugins: {
           tooltip: {
             callbacks: {
@@ -96,7 +93,7 @@ function buildChart(data) {
                   `APμ: ${r.ap_micro.toFixed(4)}`,
                   `AP̄: ${r.ap_macro.toFixed(4)}`,
                   `Prevμ: ${r.prev_micro.toFixed(4)}`,
-                  `LiftAbs: ${r.lift_abs.toFixed(4)}`,
+                  `Lift: ${(r.ap_micro - r.prev_micro).toFixed(4)}`,
                   `Pos: ${r.pos_total}`,
                   `Neg: ${r.neg_total}`,
                   `TrainLoss: ${r.train_loss.toFixed(4)}`,
@@ -110,6 +107,32 @@ function buildChart(data) {
             }
           }
         }
+      }
+    });
+  }
+
+  const liftDataset = {
+    label: 'Lift (APμ – Prevμ)',
+    data: liftData,
+    parsing: false,
+    backgroundColor: ctx => ctx.parsed.y >= 0 ? 'rgba(75, 192, 192, 0.7)' : 'rgba(255, 99, 132, 0.7)'
+  };
+
+  if (liftChart) {
+    liftChart.data.labels = labels;
+    liftChart.data.datasets[0].data = liftData;
+    liftChart.update();
+  } else {
+    liftChart = new Chart(liftCtx, {
+      type: 'bar',
+      data: { labels, datasets: [liftDataset] },
+      options: {
+        responsive: true,
+        animation: {
+          duration: 300,
+          easing: 'linear'
+        },
+        scales: { y: { beginAtZero: true } }
       }
     });
   }
