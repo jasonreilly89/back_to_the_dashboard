@@ -19,6 +19,7 @@
       const labels = data.map(d => `${d.date} ep${d.epoch}`);
       const prauc = data.map(d => d.prauc);
       const prevalence = data.map(d => d.prevalence);
+      const liftAbs = data.map(d => d.lift_abs);
       if (!chart) {
         const ctx = document.getElementById('praucChart').getContext('2d');
         chart = new Chart(ctx, {
@@ -26,16 +27,27 @@
           data: {
             labels,
             datasets: [
-              { label: 'PRAUC', data: prauc, borderColor: 'blue' },
-              { label: 'Prevalence', data: prevalence, borderColor: 'orange' }
+              { label: 'PRAUC', data: prauc, borderColor: 'blue', yAxisID: 'y' },
+              { label: 'Prevalence', data: prevalence, borderColor: 'orange', yAxisID: 'y' },
+              { label: 'Lift Abs', data: liftAbs, borderColor: 'green', yAxisID: 'y1' }
             ]
           },
-          options: { scales: { y: { beginAtZero: true, max: 1 } } }
+          options: {
+            scales: {
+              y: { beginAtZero: true, max: 1 },
+              y1: {
+                beginAtZero: true,
+                position: 'right',
+                grid: { drawOnChartArea: false }
+              }
+            }
+          }
         });
       } else {
         chart.data.labels = labels;
         chart.data.datasets[0].data = prauc;
         chart.data.datasets[1].data = prevalence;
+        chart.data.datasets[2].data = liftAbs;
         chart.update();
       }
     }
