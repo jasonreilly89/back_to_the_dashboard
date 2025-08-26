@@ -6,53 +6,63 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-  <h1>Training PRAUC and Prevalence</h1>
-  <canvas id="praucChart"></canvas>
+  <h1>APμ vs Prevalence Baseline</h1>
+  <canvas id="apChart"></canvas>
+  <h1>Lift over Baseline by Epoch</h1>
+  <canvas id="liftChart"></canvas>
   <script>
-    let chart;
+    let apChart;
+    let liftChart;
     async function fetchData() {
       const res = await fetch('/data');
       return await res.json();
     }
-    async function updateChart() {
+    async function updateCharts() {
       const data = await fetchData();
       const labels = data.map(d => `${d.date} ep${d.epoch}`);
-      const prauc = data.map(d => d.prauc);
-      const prevalence = data.map(d => d.prevalence);
-      const liftAbs = data.map(d => d.lift_abs);
-      if (!chart) {
-        const ctx = document.getElementById('praucChart').getContext('2d');
-        chart = new Chart(ctx, {
+      const ap = data.map(d => d.ap_mu);
+      const prev = data.map(d => d.prevalence);
+      const lift = data.map(d => d.ap_mu - d.prevalence);
+      if (!apChart) {
+        const apCtx = document.getElementById('apChart').getContext('2d');
+        apChart = new Chart(apCtx, {
           type: 'line',
           data: {
             labels,
             datasets: [
-              { label: 'PRAUC', data: prauc, borderColor: 'blue', yAxisID: 'y' },
-              { label: 'Prevalence', data: prevalence, borderColor: 'orange', yAxisID: 'y' },
-              { label: 'Lift Abs', data: liftAbs, borderColor: 'green', yAxisID: 'y1' }
+              { label: 'APμ', data: ap, borderColor: 'blue', fill: false },
+              { label: 'Prevalence', data: prev, borderColor: 'orange', borderDash: [5,5], fill: false }
             ]
           },
           options: {
-            scales: {
-              y: { beginAtZero: true, max: 1 },
-              y1: {
-                beginAtZero: true,
-                position: 'right',
-                grid: { drawOnChartArea: false }
-              }
-            }
+            scales: { y: { beginAtZero: true, max: 1 } }
+          }
+        });
+        const liftCtx = document.getElementById('liftChart').getContext('2d');
+        liftChart = new Chart(liftCtx, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Lift (APμ - Prevμ)', data: lift, backgroundColor: 'green' }
+            ]
+          },
+          options: {
+            scales: { y: { beginAtZero: true } }
           }
         });
       } else {
-        chart.data.labels = labels;
-        chart.data.datasets[0].data = prauc;
-        chart.data.datasets[1].data = prevalence;
-        chart.data.datasets[2].data = liftAbs;
-        chart.update();
+        apChart.data.labels = labels;
+        apChart.data.datasets[0].data = ap;
+        apChart.data.datasets[1].data = prev;
+        apChart.update();
+        liftChart.data.labels = labels;
+        liftChart.data.datasets[0].data = lift;
+        liftChart.update();
       }
     }
-    setInterval(updateChart, 5000);
-    updateChart();
+    setInterval(updateCharts, 5000);
+    updateCharts();
   </script>
 </body>
 </html>

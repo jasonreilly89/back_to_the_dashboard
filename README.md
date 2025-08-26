@@ -1,7 +1,7 @@
 # back_to_the_dashboard
 
 A minimal Flask dashboard that parses training logs for trading models and
-displays PRAUC and prevalence charts.
+displays APμ against the prevalence baseline along with lift charts.
 
 ## Usage
 1. Install dependencies
@@ -20,3 +20,4 @@ Example log line expected by the parser:
 ```
 [val 20220105] ep 01 tr:loss=0.6596 | va:APμ=0.6367 AP̄=0.3606 F1̄=0.7351 prev=0.02 sel=prauc:0.6367 (time=0.9s)
 ```
+
