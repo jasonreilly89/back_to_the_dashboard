@@ -6,7 +6,15 @@ from typing import Iterable, List, Dict, Any, Optional
 
 from flask import Blueprint, jsonify, render_template, request
 
-DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_highprev/metrics.jsonl"
+# DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/dir_8pt30m_memmap/metrics.jsonl"
+# DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_memmap/metrics.jsonl"
+DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_rf_grid_4/metrics.jsonl"
+
+# DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_memmap_debug/metrics.jsonl"
+# DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_rf_gpu/metrics.jsonl"
+# DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_xgb_gpu/metrics.jsonl"
+# DEFAULT_METRICS_PATH = "/home/jason/ml/datasets/models/setup_12pt60m_memmap_tbptt/metrics.jsonl"
+
 DEFAULT_TITLE = "Walk-Forward PRAUC"
 
 metrics_bp = Blueprint("metrics_bp", __name__)
