@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autotune Scan</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <script src="/vendor/chart.js/chart.umd.min.js?v=20250916"></script>
+    <style>
+      body { background:#f8f9fa; }
+      .card { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+      .table thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
+      .cell-run { max-width: 280px; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    </style>
+  </head>
+  <body>
+    <div class="container py-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h1 class="h4 m-0">Autotune Scan</h1>
+          <div class="text-muted small" id="logInfo">Loading…</div>
+          <div class="text-muted small" id="metaInfo"></div>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-secondary btn-sm" href="/">Dashboard</a>
+          <button id="refreshBtn" class="btn btn-primary btn-sm">Refresh</button>
+        </div>
+      </div>
+
+      <div class="card p-3 mb-3">
+        <div class="row g-2">
+          <div class="col-md-3">
+            <label class="form-label">Filter by λ (lam)</label>
+            <select id="lamFilter" class="form-select form-select-sm">
+              <option value="">All</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Color by</label>
+            <select id="colorMetric" class="form-select form-select-sm">
+              <option value="net" selected>Net</option>
+              <option value="sharpe">Sharpe</option>
+              <option value="trades">Trades</option>
+              <option value="t">t</option>
+              <option value="tail">Tail</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Point size by</label>
+            <select id="sizeMetric" class="form-select form-select-sm">
+              <option value="trades" selected>Trades</option>
+              <option value="net">Net</option>
+              <option value="sharpe">Sharpe</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card p-3 mb-3">
+        <h5 class="h6">Grid: cp_thr vs break_k</h5>
+        <canvas id="gridChart" height="220"></canvas>
+      </div>
+
+      <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="h6 m-0">Iterations</h5>
+          <div class="text-muted small" id="rowsInfo"></div>
+        </div>
+        <div class="table-responsive" style="max-height: 60vh;">
+          <table class="table table-sm table-striped align-middle" id="runsTable">
+            <thead>
+              <tr>
+                <th>λ</th>
+                <th>cp_thr</th>
+                <th>break_k</th>
+                <th class="text-end">sharpe</th>
+                <th class="text-end">t</th>
+                <th class="text-end">tail</th>
+                <th class="text-end">trades</th>
+                <th class="text-end" title="log net vs summary.json net">net (log/summary)</th>
+                <th>run_id</th>
+                <th>artifacts</th>
+                <th>started</th>
+                <th class="text-end">duration(s)</th>
+                <th>log</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      // simple persisted settings
+      function saveSetting(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
+      function loadSetting(k) { try { return localStorage.getItem(k); } catch { return null; } }
+      function uniqSorted(arr) { return Array.from(new Set(arr.filter(v => v!==null && v!==undefined))).sort((a,b)=>a-b); }
+      function colorScale(val, min, max) {
+        if (!Number.isFinite(val) || min===max) return 'rgb(147,197,253)';
+        const t = Math.max(0, Math.min(1, (val - min) / (max - min)));
+        const r = t < 0.5 ? 255 : Math.round(255 * (1 - (t - 0.5) * 2));
+        const g = t < 0.5 ? Math.round(255 * (t * 2)) : 255;
+        const b = 64;
+        return `rgb(${r},${g},${b})`;
+      }
+      function sizeScale(val, min, max) {
+        if (!Number.isFinite(val) || min===max) return 6;
+        const t = Math.max(0, Math.min(1, (val - min) / (max - min)));
+        return 4 + t * 10;
+      }
+      async function json(url) { const r = await fetch(url, { cache:'no-store' }); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+      let chart;
+      let rowsCache = [];
+      function populateLamFilter(rows) {
+        const sel = $('lamFilter');
+        const prev = sel.value;
+        const vals = uniqSorted(rows.map(r => r.lam));
+        const desired = [''].concat(vals.map(v => String(v)));
+        const current = Array.from(sel.options).map(o => o.value);
+        const same = desired.length === current.length && desired.every((v,i)=>v===current[i]);
+        if (!same) {
+          sel.innerHTML = '<option value="">All</option>' + vals.map(v => `<option value="${v}">${v}</option>`).join('');
+        }
+        // Restore previous selection if still valid, else use saved setting
+        if (desired.includes(prev) && prev !== '') sel.value = prev;
+        else {
+          const saved = loadSetting('autotune.lam');
+          if (saved && desired.includes(saved)) sel.value = saved;
+        }
+      }
+
+      function renderChart(rows) {
+        const lamSel = $('lamFilter').value;
+        const colorMetric = $('colorMetric').value;
+        const sizeMetric = $('sizeMetric').value;
+        const filtered = rows.filter(r => !lamSel || String(r.lam) === lamSel);
+        const minVal = Math.min(...filtered.map(r => Number(r[colorMetric]||0)));
+        const maxVal = Math.max(...filtered.map(r => Number(r[colorMetric]||0)));
+        const minSize = Math.min(...filtered.map(r => Number(r[sizeMetric]||0)));
+        const maxSize = Math.max(...filtered.map(r => Number(r[sizeMetric]||0)));
+        const lams = uniqSorted(filtered.map(r => r.lam));
+        const palette = ['#60a5fa','#34d399','#f472b6','#f59e0b','#a78bfa'];
+        const colorsByLam = {}; lams.forEach((v,i)=>colorsByLam[v]=palette[i%palette.length]);
+        const datasets = lams.map(l => {
+          const points = filtered.filter(r => r.lam === l).map(r => ({
+            x: r.cp,
+            y: r.k,
+            r: sizeScale(Number(r[sizeMetric]||0), minSize, maxSize),
+            color: colorScale(Number(r[colorMetric]||0), minVal, maxVal),
+            raw: r,
+          }));
+          return { label: `lam ${l}`, data: points, parsing:false, pointBackgroundColor: ctx => (ctx && ctx.raw && ctx.raw.color) || colorsByLam[l], pointBorderColor: colorsByLam[l], pointRadius: ctx => (ctx && ctx.raw && ctx.raw.r) || 6, showLine:false };
+        });
+        const ctx = $('gridChart').getContext('2d');
+        const opts = { responsive:true, animation:{duration:200}, scales:{ x:{ title:{display:true,text:'cp_thr'} }, y:{ title:{display:true,text:'break_k'} } }, plugins:{ tooltip:{ callbacks:{ label: (c)=>{ const r=c.raw&&c.raw.raw||{}; return `cp=${r.cp}, k=${r.k}, net=${r.net}, sharpe=${r.sharpe}, trades=${r.trades}`; } } } } };
+        if (!chart) chart = new Chart(ctx, { type:'scatter', data:{ datasets }, options: opts });
+        else { chart.data.datasets = datasets; chart.update('none'); }
+      }
+
+      async function fetchSummaryNet(runId) {
+        try {
+          const r = await fetch(`/runs/${encodeURIComponent(runId)}/summary.json`, { cache: 'no-store' });
+          if (!r.ok) return null;
+          const j = await r.json();
+          return { net: Number(j.net), trades: Number(j.trade_count) };
+        } catch { return null; }
+      }
+
+      function renderTable(rows) {
+        const tbody = $('runsTable').querySelector('tbody');
+        tbody.innerHTML = '';
+        const lamSel = $('lamFilter').value;
+        const filtered = rows.filter(r => !lamSel || String(r.lam) === lamSel);
+        for (const r of filtered) {
+          const tr = document.createElement('tr');
+          const summaryHref = r.run_id ? `/runs/${encodeURIComponent(r.run_id)}/summary.json` : '';
+          const reportHref = r.run_id ? `/runs/${encodeURIComponent(r.run_id)}/report.html` : '';
+          const artifacts = r.run_id ? `<a href="${summaryHref}" target="_blank">summary</a> · <a href="${reportHref}" target="_blank">report</a>` : '';
+          const logLink = r.logfile ? `<a href="/api/logs?file=${encodeURIComponent(r.logfile)}" target="_blank">${r.logfile}</a>` : '';
+          tr.innerHTML = `
+            <td>${r.lam ?? ''}</td>
+            <td>${r.cp ?? ''}</td>
+            <td>${r.k ?? ''}</td>
+            <td class="text-end">${Number.isFinite(r.sharpe)?r.sharpe.toFixed(3):''}</td>
+            <td class="text-end">${Number.isFinite(r.t)?r.t.toFixed(2):''}</td>
+            <td class="text-end">${Number.isFinite(r.tail)?r.tail.toFixed(2):''}</td>
+            <td class="text-end">${Number.isFinite(r.trades)?r.trades:''}</td>
+            <td class="text-end" data-run="${r.run_id||''}">${Number.isFinite(r.net)?r.net.toFixed(2):''}</td>
+            <td><span class="cell-run" title="${r.run_id||''}">${r.run_id||''}</span></td>
+            <td>${artifacts}</td>
+            <td>${r.start_ts || ''}</td>
+            <td class="text-end">${Number.isFinite(r.duration_s)?r.duration_s.toFixed(1):''}</td>
+            <td>${logLink}</td>`;
+          tbody.appendChild(tr);
+          // Async fetch summary to compare net/trades and annotate if different
+          if (r.run_id) {
+            fetchSummaryNet(r.run_id).then(s => {
+              if (!s) return;
+              const netCell = tr.querySelector('td[data-run]');
+              if (!netCell) return;
+              const logNet = Number(r.net);
+              const sumNet = Number(s.net);
+              if (Number.isFinite(sumNet) && Math.abs(sumNet - logNet) > 1e-6) {
+                netCell.innerHTML = `${Number.isFinite(logNet)?logNet.toFixed(2):''}<span title="summary.json net" style="color:#c62828">/${sumNet.toFixed(2)}</span>`;
+              }
+            }).catch(()=>{});
+          }
+        }
+      }
+
+      function applyFilterAndRender() {
+        const lamSel = $('lamFilter').value;
+        const filtered = rowsCache.filter(r => !lamSel || String(r.lam) === lamSel);
+        $('rowsInfo').textContent = `${filtered.length} ${lamSel? 'filtered ' : ''}iterations`;
+        renderChart(rowsCache);
+        renderTable(rowsCache);
+      }
+
+      async function refresh() {
+        try {
+          const data = await (await fetch('/api/autotune', { cache:'no-store' })).json();
+          const rows = data.rows || [];
+          rowsCache = rows;
+          $('logInfo').textContent = data.logs && data.logs.length ? `logs: ${data.logs.join(', ')}` : 'No logs found';
+          // Compose meta: sessions (dates) and window (start..end)
+          const sessions = Array.from(new Set(rows.map(r => r.dates).filter(v => Number.isFinite(v)))).sort((a,b)=>a-b);
+          const starts = Array.from(new Set(rows.map(r => r.window_start).filter(Boolean))).sort();
+          const ends = Array.from(new Set(rows.map(r => r.window_end).filter(Boolean))).sort();
+          let meta = '';
+          if (starts.length && ends.length) {
+            const start = starts[0];
+            const end = ends[ends.length-1];
+            meta += `window: ${start}..${end}`;
+          }
+          if (sessions.length) {
+            meta += (meta ? ' • ' : '') + `sessions: ${sessions.length === 1 ? sessions[0] : `${sessions[0]}–${sessions[sessions.length-1]}`}`;
+          }
+          // progress by lam (or all)
+          const lamSel = $('lamFilter').value;
+          const filtered = rows.filter(r => !lamSel || String(r.lam) === lamSel);
+          // infer grid sizes from available entries
+          let cpVals = new Set(); let kVals = new Set();
+          for (const r of filtered) { if (Array.isArray(r.grid_cp)) r.grid_cp.forEach(v => cpVals.add(v)); if (Array.isArray(r.grid_k)) r.grid_k.forEach(v => kVals.add(v)); }
+          const expected = (cpVals.size||0) * (kVals.size||0);
+          const completed = filtered.length;
+          if (expected > 0) meta += (meta ? ' • ' : '') + `progress: ${completed}/${expected}`;
+          $('metaInfo').textContent = meta;
+          $('rowsInfo').textContent = `${rows.length} iterations`;
+          populateLamFilter(rows);
+          applyFilterAndRender();
+        } catch (e) {
+          $('logInfo').textContent = 'Failed to load autotune data';
+        }
+      }
+
+      $('refreshBtn').onclick = refresh;
+      $('lamFilter').onchange = (e) => { saveSetting('autotune.lam', e.target.value); applyFilterAndRender(); };
+      $('colorMetric').onchange = (e) => { saveSetting('autotune.color', e.target.value); applyFilterAndRender(); };
+      $('sizeMetric').onchange = (e) => { saveSetting('autotune.size', e.target.value); applyFilterAndRender(); };
+      // Initialize saved color/size if available
+      const savedColor = loadSetting('autotune.color'); if (savedColor) { const opt = Array.from($('colorMetric').options).some(o=>o.value===savedColor); if (opt) $('colorMetric').value = savedColor; }
+      const savedSize = loadSetting('autotune.size'); if (savedSize) { const opt = Array.from($('sizeMetric').options).some(o=>o.value===savedSize); if (opt) $('sizeMetric').value = savedSize; }
+      refresh();
+    </script>
+  </body>
+ </html>

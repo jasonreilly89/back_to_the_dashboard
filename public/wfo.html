@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WFO Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <script src="/vendor/chart.js/chart.umd.min.js?v=20250916"></script>
+    <style>
+      body { background:#f8f9fa; }
+      .card { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+      .table thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
+      .cell { font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <div class="container py-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h1 class="h4 m-0">Walk-Forward Optimization</h1>
+          <div class="text-muted small" id="runInfo">Loading…</div>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-secondary btn-sm" href="/">Dashboard</a>
+          <button id="refreshBtn" class="btn btn-primary btn-sm">Refresh</button>
+        </div>
+      </div>
+
+      <div class="card p-3 mb-3">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-6">
+            <label class="form-label">Run</label>
+            <select id="runSelect" class="form-select form-select-sm"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-12 col-lg-6">
+          <div class="card p-3 h-100">
+            <h5 class="h6">Out-of-sample Equity</h5>
+            <canvas id="eqChart" height="160"></canvas>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="card p-3 h-100">
+            <h5 class="h6">Per-step Metrics (Sharpe)</h5>
+            <canvas id="sharpeChart" height="160"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-12">
+          <div class="card p-3">
+            <div class="row text-center">
+              <div class="col">
+                <div class="h6 text-muted">OOS Sharpe</div>
+                <div class="h4" id="kpiSharpe">—</div>
+              </div>
+              <div class="col">
+                <div class="h6 text-muted">Steps</div>
+                <div class="h4" id="kpiSteps">—</div>
+              </div>
+              <div class="col">
+                <div class="h6 text-muted">Coverage</div>
+                <div class="h4" id="kpiCoverage">—</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card p-3 mt-3">
+        <h5 class="h6">Step Table</h5>
+        <div class="table-responsive" style="max-height: 60vh;">
+          <table class="table table-sm table-striped align-middle" id="tbl">
+            <thead>
+              <tr>
+                <th>Train</th>
+                <th>Test</th>
+                <th class="text-end">n_train</th>
+                <th class="text-end">n_test</th>
+                <th class="text-end">Sharpe</th>
+                <th class="text-end">t</th>
+                <th class="text-end">λ</th>
+                <th class="text-end">cp_thr</th>
+                <th class="text-end">k</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = id => document.getElementById(id);
+      let eqChart = null, shChart = null;
+      async function json(u){ const r = await fetch(u, { cache:'no-store' }); if (!r.ok) throw new Error(u+': '+r.status); return r.json(); }
+
+      async function loadRuns() {
+        const runs = await json('/api/wfo/runs');
+        const sel = $('runSelect');
+        sel.innerHTML = runs.map(r => `<option value="${r.name}">${r.name}</option>`).join('');
+        if (runs.length) await loadOne(runs[0].name);
+      }
+
+      function renderTable(rows) {
+        const tb = $('tbl').querySelector('tbody');
+        tb.innerHTML = '';
+        const steps = rows.filter(r => r.train_start && r.test_start);
+        for (const r of steps) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td class="cell">${r.train_start} → ${r.train_end}</td>
+            <td class="cell">${r.test_start} → ${r.test_end}</td>
+            <td class="text-end cell">${r.n_train||''}</td>
+            <td class="text-end cell">${r.n_test||''}</td>
+            <td class="text-end cell">${Number.isFinite(r.after_cost_sharpe)?r.after_cost_sharpe.toFixed(3):''}</td>
+            <td class="text-end cell">${Number.isFinite(r.t_stat)?r.t_stat.toFixed(2):''}</td>
+            <td class="text-end cell">${r.param_cp_lambda ?? ''}</td>
+            <td class="text-end cell">${r.param_cp_thr ?? ''}</td>
+            <td class="text-end cell">${r.param_break_k_atr ?? ''}</td>`;
+          tb.appendChild(tr);
+        }
+      }
+
+      function renderSharpe(rows){
+        const steps = rows.filter(r => r.train_start && r.test_start);
+        const labels = steps.map((r,i)=>`#${i+1}`);
+        const data = steps.map(r => Number(r.after_cost_sharpe||0));
+        const ctx = $('sharpeChart').getContext('2d');
+        const opts = { responsive:true, plugins:{ legend:{display:false} }, scales:{ y:{ title:{display:true, text:'Sharpe'} } } };
+        if (!shChart) shChart = new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ data, backgroundColor:'#6c8ef5' }]}, options: opts });
+        else { shChart.data.labels = labels; shChart.data.datasets[0].data = data; shChart.update('none'); }
+      }
+
+      function renderEquity(eq){
+        const labels = eq.map(r => r.time);
+        const data = eq.map(r => Number(r.equity||0));
+        const ctx = $('eqChart').getContext('2d');
+        const opts = { responsive:true, plugins:{ legend:{display:false} }, scales:{ y:{ title:{display:true, text:'Equity'} } } };
+        if (!eqChart) eqChart = new Chart(ctx, { type:'line', data:{ labels, datasets:[{ data, borderColor:'#2a9d8f', fill:false, tension:0 }] }, options: opts });
+        else { eqChart.data.labels = labels; eqChart.data.datasets[0].data = data; eqChart.update('none'); }
+      }
+
+      async function loadOne(name){
+        $('runInfo').textContent = name;
+        const data = await json(`/api/wfo/metrics?run=${encodeURIComponent(name)}`);
+        const rows = data.metrics || [];
+        const eq = data.equity || [];
+        renderTable(rows);
+        renderSharpe(rows);
+        renderEquity(eq);
+        // KPIs: pick last aggregate row if present (train_* NaT)
+        const agg = rows.length ? rows[rows.length-1] : null;
+        const steps = rows.filter(r => r.train_start && r.test_start).length;
+        const covStart = rows.find(r => r.train_start)?.test_start || '';
+        const covEnd = rows.slice().reverse().find(r => r.test_end)?.test_end || '';
+        $('kpiSteps').textContent = String(steps||0);
+        if (agg && Number.isFinite(agg.after_cost_sharpe)) $('kpiSharpe').textContent = Number(agg.after_cost_sharpe).toFixed(3); else $('kpiSharpe').textContent = '—';
+        $('kpiCoverage').textContent = covStart && covEnd ? `${covStart} → ${covEnd}` : '—';
+      }
+
+      $('refreshBtn').onclick = async ()=>{ const name = $('runSelect').value; await loadOne(name); };
+      $('runSelect').onchange = async ()=>{ await loadOne($('runSelect').value); };
+      loadRuns();
+    </script>
+  </body>
+ </html>

@@ -9,3 +9,9 @@ __pycache__/
 scripts/
 *.sh
 *.py
+
+# Local build outputs
+static/dist/
+.venv/
+node_modules/
+package-lock.json

@@ -1,0 +1,1292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Build Monitor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <style>
+      body { background:#f8f9fa; }
+      .card { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+      .badge-status { font-size:0.85rem; }
+      .log-link { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .table td, .table th { vertical-align: middle; }
+      .status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+      .status-success { background:#28a745; }
+      .status-failed { background:#dc3545; }
+      .status-running { background:#ffc107; }
+      .status-stale { background:#0dcaf0; }
+      .status-never { background:#6c757d; opacity:0.7; }
+      .status-planned { background:#adb5bd; }
+      .pipeline-group-card { border:1px solid #e2e5e9; border-radius:0.75rem; background:#fff; }
+      .pipeline-group-title { font-size:0.8rem; letter-spacing:0.08em; text-transform:uppercase; color:#6c757d; margin-bottom:0.75rem; }
+      .pipeline-job { border:1px solid #e9ecef; border-radius:0.6rem; padding:0.75rem; background:#fff; transition:border-color 0.2s ease, box-shadow 0.2s ease; }
+      .pipeline-job + .pipeline-job { margin-top:0.75rem; }
+      .pipeline-job--running { border-color:#ffe066; background:#fff9e6; }
+      .pipeline-job--failed { border-color:#f5c2c7; background:#fff5f6; }
+      .pipeline-job--success { border-color:#badbcc; }
+      .pipeline-job--stale { border-color:#9eeaf9; background:#f8fdff; }
+      .pipeline-job--never { border-style:dashed; }
+      .pipeline-job--unknown { border-color:#d3d7dd; }
+      .pipeline-job--planned { border-style:dashed; opacity:0.85; }
+      .pipeline-job-header { display:flex; justify-content:space-between; align-items:flex-start; gap:0.5rem; }
+      .pipeline-job-header .badge { white-space:nowrap; }
+      .pipeline-job h3 { font-size:1rem; margin:0; }
+      .pipeline-job-desc { font-size:0.85rem; color:#6c757d; margin-top:0.25rem; }
+      .pipeline-metrics { margin-top:0.5rem; font-size:0.82rem; color:#495057; display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.35rem; }
+      .pipeline-actions { margin-top:0.75rem; display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:0.5rem; font-size:0.82rem; }
+      .pipeline-actions .btn-group { display:flex; gap:0.5rem; }
+      .pipeline-details { margin:0.5rem 0 0; padding-left:1.1rem; font-size:0.78rem; color:#6c757d; }
+      .pipeline-details li { margin-bottom:0.25rem; }
+      .approach-card { border:1px solid #dde1e6; border-radius:0.9rem; background:#fff; padding:1.25rem; margin-bottom:1.5rem; }
+      .approach-header { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:0.5rem; margin-bottom:0.5rem; }
+      .approach-header h3 { margin:0; font-size:1.1rem; }
+      .approach-meta { font-size:0.82rem; color:#6c757d; }
+      .approach-description { font-size:0.85rem; color:#6c757d; margin-bottom:0.75rem; }
+      .sequence-summary { border:1px solid #ced4da; border-radius:0.6rem; background:#f8f9ff; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; }
+      .sequence-summary h4 { font-size:0.95rem; margin:0 0 0.5rem 0; }
+      .sequence-summary table { width:100%; font-size:0.82rem; }
+      .sequence-summary td { padding:0.25rem 0.5rem; }
+      @media (max-width: 576px) {
+        .pipeline-metrics { grid-template-columns:1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container py-4">
+      <div class="d-flex flex-wrap gap-3 justify-content-between align-items-center mb-3">
+        <div>
+          <h1 class="h3 m-0">Pipeline Builds</h1>
+          <div class="small text-muted" id="lastUpdated">Last updated —</div>
+        </div>
+        <div class="d-flex gap-2 align-items-end">
+          <div class="form-check me-2">
+            <input id="autoRefresh" class="form-check-input" type="checkbox" checked>
+            <label class="form-check-label" for="autoRefresh">Auto-refresh</label>
+          </div>
+          <div class="input-group input-group-sm" style="width:160px">
+            <span class="input-group-text">Interval</span>
+            <input id="refreshInterval" type="number" class="form-control" value="15" min="5">
+            <span class="input-group-text">s</span>
+          </div>
+          <a class="btn btn-outline-secondary btn-sm" href="/index.html">Dashboard</a>
+          <button id="refreshBtn" class="btn btn-primary btn-sm">Refresh</button>
+        </div>
+      </div>
+
+      <div id="alert" class="alert alert-danger d-none" role="alert"></div>
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h5 m-0">Start New Build</h2>
+            <small id="startStatus" class="text-muted">&nbsp;</small>
+          </div>
+          <form id="startForm">
+            <div class="row g-3 align-items-end" id="buildFieldsRow">
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="buildGroup">Category</label>
+                <select class="form-select" id="buildGroup"></select>
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="buildJob">Job</label>
+                <select class="form-select" id="buildJob"></select>
+                <div class="form-text" id="buildJobDescription"></div>
+              </div>
+            </div>
+            <div class="mt-3 d-flex gap-2">
+              <button type="submit" class="btn btn-primary" id="startSubmit">Start Build</button>
+              <button type="button" class="btn btn-outline-secondary" id="resetDefaults">Reset</button>
+            </div>
+          </form>
+      </div>
+    </div>
+
+      <div class="card mb-3" id="pipelineCard">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h5 m-0">Pipeline Overview</h2>
+            <small class="text-muted" id="pipelineMeta">Loading…</small>
+          </div>
+          <div class="row g-3" id="pipelineGroups">
+            <div class="col-12 text-muted small">Loading pipeline snapshot…</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="text-muted mb-1">Successful</div>
+              <div id="countSuccess" class="h3 m-0">0</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="text-muted mb-1">Running</div>
+              <div id="countRunning" class="h3 m-0">0</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="text-muted mb-1">Failed</div>
+              <div id="countFailed" class="h3 m-0">0</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="text-muted mb-1">Total</div>
+              <div id="countTotal" class="h3 m-0">0</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h5 m-0">Recent builds</h2>
+            <div class="small text-muted" id="buildCountMeta">—</div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle" id="buildsTable">
+              <thead>
+                <tr>
+                  <th style="width:200px">Job</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Finished</th>
+                  <th>Duration</th>
+                  <th>Log</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="6" class="text-muted">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let timer;
+      let buildDefinitions = [];
+      let buildGroups = [];
+      let formInitialised = false;
+      let approachMeta = [];
+      let approachSections = [];
+      let sequenceModelInfo = null;
+      let boostingModelInfo = null;
+      let hmmInfo = null;
+
+      const statusClasses = {
+        success: { badge: 'bg-success', dot: 'status-success', label: 'Success' },
+        failed: { badge: 'bg-danger', dot: 'status-failed', label: 'Failed' },
+        running: { badge: 'bg-warning text-dark', dot: 'status-running', label: 'Running' },
+        stale: { badge: 'bg-info text-dark', dot: 'status-stale', label: 'Stale' },
+        never: { badge: 'bg-secondary', dot: 'status-never', label: 'Never Run' },
+        planned: { badge: 'bg-secondary', dot: 'status-planned', label: 'Planned' },
+        unknown: { badge: 'bg-secondary', dot: '', label: 'Unknown' },
+      };
+
+      function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        }[c] || c));
+      }
+
+      function getDefinition(id) {
+        return buildDefinitions.find((d) => d.id === id);
+      }
+
+      function renderDynamicFields(def) {
+        const row = document.getElementById('buildFieldsRow');
+        if (!row) return;
+        while (row.children.length > 1) {
+          row.removeChild(row.lastElementChild);
+        }
+        if (!def || !Array.isArray(def.fields)) return;
+        def.fields.forEach((field) => {
+          const col = document.createElement('div');
+          col.className = 'col-12 col-md-4';
+          const label = document.createElement('label');
+          label.className = 'form-label';
+          label.textContent = field.label || field.name;
+          label.setAttribute('for', `field-${field.name}`);
+          let input;
+          if (field.type === 'select' && Array.isArray(field.options)) {
+            input = document.createElement('select');
+            input.className = 'form-select';
+            field.options.forEach((opt) => {
+              const option = document.createElement('option');
+              option.value = opt.value;
+              option.textContent = opt.label;
+              if (String(opt.value) === String(field.default)) option.selected = true;
+              input.appendChild(option);
+            });
+          } else {
+            input = document.createElement('input');
+            input.type = field.type === 'number' ? 'number' : 'text';
+            input.className = 'form-control';
+            if (field.type === 'number') input.step = 'any';
+            if (field.default !== undefined) input.value = field.default;
+          }
+          input.id = `field-${field.name}`;
+          input.name = field.name;
+          col.appendChild(label);
+          col.appendChild(input);
+          row.appendChild(col);
+        });
+      }
+
+      function renderBuildForm(selectedId) {
+        const jobSelect = document.getElementById('buildJob');
+        const desc = document.getElementById('buildJobDescription');
+        const groupSelect = document.getElementById('buildGroup');
+        if (!jobSelect) return;
+        const previous = selectedId || jobSelect.value;
+        jobSelect.innerHTML = '';
+        if (groupSelect) {
+          const prevGroup = groupSelect.value;
+          groupSelect.innerHTML = '';
+          buildGroups.forEach((grp, idx) => {
+            const opt = document.createElement('option');
+            opt.value = idx;
+            opt.textContent = grp.name;
+            groupSelect.appendChild(opt);
+          });
+          if (groupSelect.options.length === 0) {
+            renderDynamicFields(null);
+            if (desc) desc.textContent = '';
+            return;
+          }
+          if (prevGroup) {
+            const parsed = Number(prevGroup);
+            if (!Number.isNaN(parsed) && parsed < groupSelect.options.length) {
+              groupSelect.value = prevGroup;
+            }
+          }
+          if (!groupSelect.value) {
+            groupSelect.value = '0';
+          }
+        }
+
+        const selectedGroup = groupSelect
+          ? buildGroups[Number(groupSelect.value || 0)] || { definitions: [] }
+          : { definitions: buildDefinitions };
+
+        const defs = selectedGroup.definitions || [];
+        defs.forEach((def) => {
+          const opt = document.createElement('option');
+          opt.value = def.id;
+          opt.textContent = def.label;
+          if (def.enabled === false) {
+            opt.disabled = true;
+            opt.textContent = `${def.label} (planned)`;
+          }
+          jobSelect.appendChild(opt);
+        });
+
+        if (defs.length === 0) {
+          renderDynamicFields(null);
+          if (desc) desc.textContent = '';
+          return;
+        }
+        if (previous && defs.some((d) => d.id === previous && d.enabled !== false)) {
+          jobSelect.value = previous;
+        }
+        if (!jobSelect.value || jobSelect.options[jobSelect.selectedIndex]?.disabled) {
+          const firstEnabled = defs.find((d) => d.enabled !== false);
+          jobSelect.value = firstEnabled ? firstEnabled.id : '';
+        }
+        const def = getDefinition(jobSelect.value);
+        if (desc) desc.textContent = def?.description || '';
+        renderDynamicFields(def);
+      }
+
+      function collectParams(def) {
+        const params = {};
+        if (!def || !Array.isArray(def.fields)) return params;
+        def.fields.forEach((field) => {
+          const el = document.querySelector(`#startForm [name="${field.name}"]`);
+          if (!el) return;
+          if (field.type === 'number') {
+            const num = el.value === '' ? undefined : Number(el.value);
+            if (Number.isFinite(num)) params[field.name] = num;
+          } else if (field.type === 'select') {
+            params[field.name] = el.value;
+          } else {
+            params[field.name] = el.value.trim();
+          }
+        });
+        return params;
+      }
+
+      function computeGroups(defs) {
+        const map = new Map();
+        (defs || []).forEach((def) => {
+          const name = def.group || 'Other';
+          if (!map.has(name)) map.set(name, []);
+          map.get(name).push(def);
+        });
+        return Array.from(map.entries()).map(([name, definitions]) => ({ name, definitions }));
+      }
+
+      function computeApproachSections(defs, meta) {
+        const metaMap = new Map();
+        (Array.isArray(meta) ? meta : []).forEach((item) => {
+          if (item && item.id) metaMap.set(item.id, item);
+        });
+        const map = new Map();
+        (defs || []).forEach((def) => {
+          if (!def) return;
+          const key = def.approach || 'other';
+          if (!map.has(key)) {
+            const metaEntry = metaMap.get(key) || {};
+            map.set(key, {
+              id: key,
+              label: metaEntry.label || key.replace(/_/g, ' ').toUpperCase(),
+              description: metaEntry.description || '',
+              groups: new Map(),
+              planned: 0,
+            });
+          }
+          const entry = map.get(key);
+          if (def.enabled === false) entry.planned += 1;
+          const groupName = def.group || 'Other';
+          if (!entry.groups.has(groupName)) entry.groups.set(groupName, []);
+          entry.groups.get(groupName).push(def);
+        });
+        const ordered = [];
+        (Array.isArray(meta) ? meta : []).forEach((item) => {
+          if (!item || !map.has(item.id)) return;
+          ordered.push(map.get(item.id));
+          map.delete(item.id);
+        });
+        map.forEach((value) => ordered.push(value));
+        return ordered.map((entry) => ({
+          id: entry.id,
+          label: entry.label,
+          description: entry.description,
+          planned: entry.planned,
+          groups: Array.from(entry.groups.entries()).map(([name, definitions]) => ({ name, definitions })),
+        }));
+      }
+
+      function updateApproachSections() {
+        approachSections = computeApproachSections(buildDefinitions, approachMeta);
+      }
+
+      async function fetchSequenceModelInfo() {
+        try {
+          const res = await fetch('/api/models/sequence', { cache: 'no-store' });
+          if (!res.ok) throw new Error('sequence model info unavailable');
+          sequenceModelInfo = await res.json();
+        } catch (err) {
+          console.warn('sequence model info fetch failed:', err);
+          sequenceModelInfo = null;
+        }
+      }
+
+      async function fetchBoostingModelInfo() {
+        try {
+          const res = await fetch('/api/models/boosting', { cache: 'no-store' });
+          if (!res.ok) throw new Error('boosting model info unavailable');
+          boostingModelInfo = await res.json();
+        } catch (err) {
+          console.warn('boosting model info fetch failed:', err);
+          boostingModelInfo = null;
+        }
+      }
+
+      async function fetchHmmInfo() {
+        try {
+          const res = await fetch('/api/labels/hmm', { cache: 'no-store' });
+          if (!res.ok) throw new Error('hmm info unavailable');
+          hmmInfo = await res.json();
+        } catch (err) {
+          console.warn('hmm info fetch failed:', err);
+          hmmInfo = null;
+        }
+      }
+
+      function buildSequenceSummaryNode() {
+        const info = sequenceModelInfo;
+        if (!info || info.ok === false) return null;
+        const container = document.createElement('div');
+        container.className = 'sequence-summary';
+
+        const title = document.createElement('h4');
+        title.textContent = 'Sequence Model Snapshot';
+        container.appendChild(title);
+
+        const updatedAt = info.model_updated_at || info?.evaluation?.generated_at || null;
+        if (updatedAt) {
+          const metaLine = document.createElement('div');
+          metaLine.className = 'text-muted mb-2';
+          metaLine.textContent = `Updated ${fmtDate(updatedAt)} (${fmtRelative(updatedAt)})`;
+          container.appendChild(metaLine);
+        }
+
+        const stats = info.evaluation?.stats || {};
+        if (stats.total_samples) {
+          const statsLine = document.createElement('div');
+          statsLine.className = 'mb-2';
+          statsLine.textContent = `Evaluated ${stats.evaluated_samples || stats.total_samples} / ${stats.total_samples} samples · positives ${stats.positives} · negatives ${stats.negatives}`;
+          container.appendChild(statsLine);
+        }
+
+        const featureList = (info.evaluation && Array.isArray(info.evaluation.features) && info.evaluation.features.length)
+          ? info.evaluation.features
+          : (info.training && Array.isArray(info.training.features) ? info.training.features : null);
+        if (featureList && featureList.length) {
+          const featsLine = document.createElement('div');
+          featsLine.className = 'text-muted mb-2';
+          featsLine.textContent = `Features: ${featureList.join(', ')}`;
+          container.appendChild(featsLine);
+        }
+
+        const metrics = info.evaluation?.metrics || {};
+        const seqMetrics = metrics.sequence_model || null;
+        const baselineMetrics = metrics.logistic_baseline || null;
+        if (seqMetrics) {
+          const table = document.createElement('table');
+          table.className = 'table table-sm mb-0';
+          table.innerHTML = `
+            <thead>
+              <tr><th></th><th>Sequence</th><th>Baseline</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ROC AUC</td><td>${fmtFloat(seqMetrics.roc_auc)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.roc_auc) : '—'}</td></tr>
+              <tr><td>PR AUC</td><td>${fmtFloat(seqMetrics.pr_auc)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.pr_auc) : '—'}</td></tr>
+              <tr><td>F1@${fmtFloat(seqMetrics.threshold, 2)}</td><td>${fmtFloat(seqMetrics.f1)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.f1) : '—'}</td></tr>
+              <tr><td>Precision</td><td>${fmtPercent(seqMetrics.precision)}</td><td>${baselineMetrics ? fmtPercent(baselineMetrics.precision) : '—'}</td></tr>
+              <tr><td>Recall</td><td>${fmtPercent(seqMetrics.recall)}</td><td>${baselineMetrics ? fmtPercent(baselineMetrics.recall) : '—'}</td></tr>
+              <tr><td>Brier</td><td>${fmtFloat(seqMetrics.brier)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.brier) : '—'}</td></tr>
+            </tbody>
+          `;
+          container.appendChild(table);
+        } else {
+          const placeholder = document.createElement('div');
+          placeholder.className = 'text-muted';
+          placeholder.textContent = 'Run "Sequence Model Evaluation" to populate metrics.';
+          container.appendChild(placeholder);
+        }
+
+        const latency = info.latency;
+        if (latency && typeof latency === 'object') {
+          const latencyLine = document.createElement('div');
+          latencyLine.className = 'mt-2';
+          latencyLine.textContent = `Latency — sequence ${fmtFloat(latency.sequence_mean_ms, 2)} ms vs baseline ${fmtFloat(latency.baseline_mean_ms, 2)} ms`;
+          container.appendChild(latencyLine);
+        }
+
+        const top = Array.isArray(info.evaluation?.top_predictions) ? info.evaluation.top_predictions.slice(0, 5) : [];
+        if (top.length) {
+          const header = document.createElement('div');
+          header.className = 'mt-2';
+          header.textContent = 'Top alerts:';
+          container.appendChild(header);
+          const list = document.createElement('ol');
+          top.forEach((item) => {
+            const li = document.createElement('li');
+            const ts = item.timestamp ? `${fmtDate(item.timestamp)} (${fmtRelative(item.timestamp)})` : '—';
+            const prob = fmtPercent(item.probability, 1);
+            const lead = item.lead_time === null || item.lead_time === undefined || Number.isNaN(item.lead_time)
+              ? 'n/a'
+              : `${fmtFloat(item.lead_time, 1)}s`;
+            li.textContent = `${ts} → ${prob} · ${item.label === 1 ? 'event ahead' : 'no event'} · lead ${lead}`;
+            list.appendChild(li);
+          });
+          container.appendChild(list);
+        }
+
+        return container;
+      }
+
+      function buildBoostingSummaryNode() {
+        const info = boostingModelInfo;
+        if (!info || info.ok === false) return null;
+        const container = document.createElement('div');
+        container.className = 'sequence-summary';
+
+        const title = document.createElement('h4');
+        title.textContent = 'Boosting Model Snapshot';
+        container.appendChild(title);
+
+        const updatedAt = info.model_updated_at || info?.evaluation?.generated_at || null;
+        if (updatedAt) {
+          const metaLine = document.createElement('div');
+          metaLine.className = 'text-muted mb-2';
+          metaLine.textContent = `Updated ${fmtDate(updatedAt)} (${fmtRelative(updatedAt)})`;
+          container.appendChild(metaLine);
+        }
+
+        const metrics = info.evaluation?.metrics || info.training?.metrics || {};
+        const boosting = metrics.boosting || metrics.boost || null;
+        const logistic = metrics.logistic || null;
+        if (boosting) {
+          const table = document.createElement('table');
+          table.className = 'table table-sm mb-0';
+          table.innerHTML = `
+            <thead>
+              <tr><th></th><th>Boosting</th><th>Logistic</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ROC AUC</td><td>${fmtFloat(boosting.roc_auc)}</td><td>${logistic ? fmtFloat(logistic.roc_auc) : '—'}</td></tr>
+              <tr><td>PR AUC</td><td>${fmtFloat(boosting.pr_auc)}</td><td>${logistic ? fmtFloat(logistic.pr_auc) : '—'}</td></tr>
+              <tr><td>F1@${fmtFloat(boosting.threshold, 2)}</td><td>${fmtFloat(boosting.f1)}</td><td>${logistic ? fmtFloat(logistic.f1) : '—'}</td></tr>
+              <tr><td>Precision</td><td>${fmtPercent(boosting.precision)}</td><td>${logistic ? fmtPercent(logistic.precision) : '—'}</td></tr>
+              <tr><td>Recall</td><td>${fmtPercent(boosting.recall)}</td><td>${logistic ? fmtPercent(logistic.recall) : '—'}</td></tr>
+              <tr><td>Brier</td><td>${fmtFloat(boosting.brier)}</td><td>${logistic ? fmtFloat(logistic.brier) : '—'}</td></tr>
+            </tbody>
+          `;
+          container.appendChild(table);
+        } else {
+          const placeholder = document.createElement('div');
+          placeholder.className = 'text-muted';
+          placeholder.textContent = 'Run boosting evaluation to populate metrics.';
+          container.appendChild(placeholder);
+        }
+
+        const top = Array.isArray(info.training?.top_predictions) ? info.training.top_predictions.slice(0, 5)
+          : (Array.isArray(info.evaluation?.top_predictions) ? info.evaluation.top_predictions.slice(0, 5) : []);
+        if (top.length) {
+          const header = document.createElement('div');
+          header.className = 'mt-2';
+          header.textContent = 'Top alerts:';
+          container.appendChild(header);
+          const list = document.createElement('ol');
+          top.forEach((item) => {
+            const li = document.createElement('li');
+            const ts = item.timestamp ? `${fmtDate(item.timestamp)} (${fmtRelative(item.timestamp)})` : '—';
+            const prob = fmtPercent(item.probability, 1);
+            const lead = item.lead_time === null || item.lead_time === undefined || Number.isNaN(item.lead_time)
+              ? 'n/a'
+              : `${fmtFloat(item.lead_time, 1)}s`;
+            li.textContent = `${ts} → ${prob} · ${item.label === 1 ? 'event ahead' : 'no event'} · lead ${lead}`;
+            list.appendChild(li);
+          });
+          container.appendChild(list);
+        }
+
+        return container;
+      }
+
+      function buildHmmSummaryNode() {
+        const info = hmmInfo;
+        if (!info || info.ok === false) return null;
+        const metrics = info.metrics || {};
+        const container = document.createElement('div');
+        container.className = 'sequence-summary';
+
+        const title = document.createElement('h4');
+        title.textContent = 'HMM Label Snapshot';
+        container.appendChild(title);
+
+        const updatedAt = info.summary?.generated_at || metrics.generated_at || null;
+        if (updatedAt) {
+          const metaLine = document.createElement('div');
+          metaLine.className = 'text-muted mb-2';
+          metaLine.textContent = `Updated ${fmtDate(updatedAt)} (${fmtRelative(updatedAt)})`;
+          container.appendChild(metaLine);
+        }
+
+        const counts = metrics.state_counts || {};
+        if (Object.keys(counts).length) {
+          const table = document.createElement('table');
+          table.className = 'table table-sm mb-0';
+          const rows = Object.keys(counts).map((state) => `<tr><td>State ${state}</td><td>${counts[state]}</td></tr>`).join('');
+          table.innerHTML = `<tbody>${rows}</tbody>`;
+          container.appendChild(table);
+        }
+
+        if (metrics.avg_change_duration_s) {
+          const durationLine = document.createElement('div');
+          durationLine.textContent = `Avg change duration: ${fmtFloat(metrics.avg_change_duration_s, 2)}s`;
+          container.appendChild(durationLine);
+        }
+
+        if (metrics.last_change) {
+          const lastChange = document.createElement('div');
+          lastChange.className = 'text-muted';
+          lastChange.textContent = `Last change: ${fmtDate(metrics.last_change)} (${fmtRelative(metrics.last_change)})`;
+          container.appendChild(lastChange);
+        }
+
+        if (metrics.num_change_points !== undefined) {
+          const numCp = document.createElement('div');
+          numCp.textContent = `Change points: ${metrics.num_change_points}`;
+          container.appendChild(numCp);
+        }
+
+        return container;
+      }
+
+      function ensureForm(defs) {
+        const current = document.getElementById('buildJob')?.value;
+        buildDefinitions = Array.isArray(defs) ? defs : [];
+        buildGroups = computeGroups(buildDefinitions);
+        renderBuildForm(current);
+        updateApproachSections();
+        if (!formInitialised) {
+          const jobSelect = document.getElementById('buildJob');
+          const desc = document.getElementById('buildJobDescription');
+          const groupSelect = document.getElementById('buildGroup');
+          if (groupSelect) {
+            groupSelect.addEventListener('change', () => {
+              renderBuildForm();
+            });
+          }
+          if (jobSelect) {
+            jobSelect.addEventListener('change', () => {
+              const def = getDefinition(jobSelect.value);
+              if (desc) desc.textContent = def?.description || '';
+              renderDynamicFields(def);
+            });
+          }
+          const resetBtn = document.getElementById('resetDefaults');
+          if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+              const def = getDefinition(document.getElementById('buildJob')?.value);
+              renderDynamicFields(def);
+              const status = document.getElementById('startStatus');
+              if (status) status.innerHTML = '&nbsp;';
+            });
+          }
+          const form = document.getElementById('startForm');
+          if (form) {
+            form.addEventListener('submit', async (event) => {
+              event.preventDefault();
+              const jobSelect = document.getElementById('buildJob');
+              if (!jobSelect) return;
+              const jobId = jobSelect.value;
+              const def = getDefinition(jobId);
+              const statusEl = document.getElementById('startStatus');
+              if (!def) {
+                if (statusEl) {
+                  statusEl.textContent = 'Select a job before starting';
+                  statusEl.classList.remove('text-muted');
+                  statusEl.classList.add('text-danger');
+                }
+                return;
+              }
+              const params = collectParams(def);
+              await startBuild(jobId, def, params, { source: 'form' });
+            });
+          }
+          formInitialised = true;
+        }
+      }
+
+      function summarizeBuildsLocal(builds) {
+        const out = {};
+        const pick = (build) => ({
+          id: build.id,
+          job: build.job,
+          job_label: build.job_label,
+          status: build.status,
+          started_at: build.started_at,
+          finished_at: build.finished_at,
+          duration_s: build.duration_s,
+          logfile: build.logfile,
+          updated_at: build.updated_at,
+          active: Boolean(build.active),
+          params: build.params || {},
+        });
+        for (const build of builds || []) {
+          const jobId = build.job;
+          if (!jobId) continue;
+          if (!out[jobId]) {
+            out[jobId] = {
+              job: jobId,
+              latest: null,
+              last_success: null,
+              last_failed: null,
+              counts: { total: 0, success: 0, failed: 0, running: 0 },
+            };
+          }
+          const bucket = out[jobId];
+          bucket.counts.total += 1;
+          if (build.status === 'success') {
+            bucket.counts.success += 1;
+            if (!bucket.last_success) bucket.last_success = pick(build);
+          } else if (build.status === 'failed') {
+            bucket.counts.failed += 1;
+            if (!bucket.last_failed) bucket.last_failed = pick(build);
+          }
+          if (build.status === 'running' || build.active) {
+            bucket.counts.running += 1;
+          }
+          if (!bucket.latest) bucket.latest = pick(build);
+        }
+        return out;
+      }
+
+      function fmtDuration(seconds) {
+        if (!Number.isFinite(seconds) || seconds <= 0) return '—';
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.round(seconds % 60);
+        if (mins === 0) return `${secs}s`;
+        if (mins < 60) return `${mins}m ${secs}s`;
+        const hours = Math.floor(mins / 60);
+        const remMin = mins % 60;
+        return `${hours}h ${remMin}m`;
+      }
+
+      function fmtDate(iso) {
+        if (!iso) return '—';
+        try {
+          const date = new Date(iso);
+          if (!Number.isFinite(date.getTime())) return '—';
+          return date.toLocaleString();
+        } catch {
+          return '—';
+        }
+      }
+
+      function fmtRelative(iso) {
+        if (!iso) return '—';
+        const ts = Date.parse(iso);
+        if (!Number.isFinite(ts)) return '—';
+        const diffMs = Date.now() - ts;
+        const abs = Math.abs(diffMs);
+        if (abs < 60_000) return 'just now';
+        if (abs < 3_600_000) {
+          const mins = Math.round(abs / 60_000);
+          return `${mins}m ${diffMs >= 0 ? 'ago' : 'from now'}`;
+        }
+        if (abs < 86_400_000) {
+          const hours = Math.round(abs / 3_600_000);
+          return `${hours}h ${diffMs >= 0 ? 'ago' : 'from now'}`;
+        }
+        const days = Math.round(abs / 86_400_000);
+        return `${days}d ${diffMs >= 0 ? 'ago' : 'from now'}`;
+      }
+
+      function fmtFloat(value, digits = 3) {
+        if (value === null || value === undefined) return '—';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '—';
+        return num.toFixed(digits);
+      }
+
+      function fmtPercent(value, digits = 1) {
+        if (value === null || value === undefined) return '—';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '—';
+        return `${(num * 100).toFixed(digits)}%`;
+      }
+
+      function formatParamsText(params) {
+        if (!params || typeof params !== 'object') return '';
+        const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '');
+        if (entries.length === 0) return '';
+        const shown = entries.slice(0, 4).map(([k, v]) => `${k}=${v}`);
+        if (entries.length > 4) shown.push(`+${entries.length - 4} more`);
+        return shown.join(', ');
+      }
+
+      function selectJob(jobId, options = {}) {
+        if (!jobId) return null;
+        const groupSelect = document.getElementById('buildGroup');
+        if (groupSelect) {
+          const groupIdx = buildGroups.findIndex((group) => (group.definitions || []).some((def) => def.id === jobId));
+          if (groupIdx >= 0) {
+            groupSelect.value = String(groupIdx);
+          }
+        }
+        renderBuildForm(jobId);
+        const jobSelect = document.getElementById('buildJob');
+        if (jobSelect) {
+          jobSelect.value = jobId;
+          jobSelect.dispatchEvent(new Event('change'));
+        }
+        if (options.scroll !== false) {
+          const form = document.getElementById('startForm');
+          if (form && typeof form.scrollIntoView === 'function') {
+            form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }
+        return getDefinition(jobId);
+      }
+
+      function attachPipelineStartHandlers() {
+        document.querySelectorAll('.pipeline-start-btn').forEach((btn) => {
+          if (btn.dataset.bound === '1') return;
+          if (btn.disabled) return;
+          btn.dataset.bound = '1';
+          btn.addEventListener('click', async () => {
+            const jobId = btn.getAttribute('data-job-id');
+            if (!jobId) return;
+            const def = selectJob(jobId, { scroll: false });
+            if (!def) return;
+            const params = collectParams(def);
+            if (!btn.dataset.original) {
+              btn.dataset.original = btn.textContent;
+            }
+            btn.disabled = true;
+            btn.textContent = 'Starting…';
+            await startBuild(jobId, def, params, { source: 'pipeline', button: btn });
+          });
+        });
+        document.querySelectorAll('.pipeline-kill-btn').forEach((btn) => {
+          if (btn.dataset.bound === '1') return;
+          btn.dataset.bound = '1';
+          btn.addEventListener('click', () => {
+            const logfile = btn.getAttribute('data-logfile');
+            killBuild(logfile, btn);
+          });
+        });
+      }
+
+      async function startBuild(jobId, def, params, options = {}) {
+        const status = document.getElementById('startStatus');
+        const submitBtn = document.getElementById('startSubmit');
+        const button = options.button;
+        const source = options.source || 'form';
+        if (def && def.enabled === false) {
+          if (status) {
+            status.textContent = `${def.label || jobId} is not enabled yet`;
+            status.classList.remove('text-muted', 'text-success');
+            status.classList.add('text-danger');
+          }
+          if (button) {
+            button.disabled = false;
+            button.textContent = button.dataset.original || 'Start';
+          }
+          return false;
+        }
+        if (status) {
+          const label = def?.label || jobId;
+          status.textContent = source === 'form' ? 'Starting…' : `Starting ${label}…`;
+          status.classList.remove('text-danger', 'text-success');
+          status.classList.add('text-muted');
+        }
+        if (source === 'form' && submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.dataset.original = submitBtn.textContent;
+          submitBtn.textContent = 'Starting…';
+        } else if (button) {
+          button.dataset.original = button.dataset.original || button.textContent;
+        }
+        try {
+          const res = await fetch('/api/builds/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: jobId, params }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.ok === false) {
+            if (status) {
+              status.textContent = data.error || 'Failed to start build';
+              status.classList.remove('text-muted', 'text-success');
+              status.classList.add('text-danger');
+            }
+            return false;
+          }
+          if (status) {
+            status.textContent = 'Build started';
+            status.classList.remove('text-muted', 'text-danger');
+            status.classList.add('text-success');
+          }
+          await refresh();
+          return true;
+        } catch (err) {
+          if (status) {
+            status.textContent = err?.message || 'Failed to start build';
+            status.classList.remove('text-muted', 'text-success');
+            status.classList.add('text-danger');
+          }
+          return false;
+        } finally {
+          if (source === 'form' && submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = submitBtn.dataset.original || 'Start Build';
+          }
+          if (button) {
+            button.disabled = false;
+            button.textContent = button.dataset.original || 'Start';
+          }
+        }
+      }
+
+      function renderPipelineOverview(builds, overview, generatedAt) {
+        const container = document.getElementById('pipelineGroups');
+        const meta = document.getElementById('pipelineMeta');
+        if (!container) return;
+        if (!Array.isArray(buildDefinitions) || buildDefinitions.length === 0) {
+          container.innerHTML = '<div class="col-12 text-muted small">No build definitions loaded.</div>';
+          if (meta) meta.textContent = 'Pipeline definitions unavailable';
+          return;
+        }
+
+        const jobSummary = overview && typeof overview === 'object' && overview.jobs
+          ? overview.jobs
+          : summarizeBuildsLocal(builds || []);
+        const approachSummary = overview && typeof overview === 'object' && overview.approaches
+          ? overview.approaches
+          : {};
+
+        container.innerHTML = '';
+
+        if (!Array.isArray(approachSections) || approachSections.length === 0) {
+          container.innerHTML = '<div class="col-12 text-muted small">No pipeline approaches to display.</div>';
+          if (meta) meta.textContent = generatedAt ? `Updated ${fmtDate(generatedAt)}` : 'Awaiting pipeline data';
+          return;
+        }
+
+        const formatSuccessRate = (summary) => {
+          const counts = summary?.counts;
+          if (!counts || !counts.total) return '—';
+          const pct = Math.round((counts.success / counts.total) * 100);
+          return `${counts.success}/${counts.total} (${pct}% success)`;
+        };
+
+        const statusFor = (summary, def) => {
+          if (def?.enabled === false) return 'planned';
+          if (!summary || !summary.latest) return 'never';
+          if (summary.latest.active || summary.latest.status === 'running' || summary.counts.running > 0) return 'running';
+          if (summary.latest.status === 'failed') return 'failed';
+          if (summary.latest.status === 'success') {
+            const ref = summary.latest.finished_at || summary.latest.updated_at || summary.latest.started_at;
+            if (ref) {
+              const ageHours = (Date.now() - Date.parse(ref)) / 3_600_000;
+              if (Number.isFinite(ageHours) && ageHours > 24) return 'stale';
+            }
+            return 'success';
+          }
+          return 'unknown';
+        };
+
+        let runningCount = 0;
+        let failedCount = 0;
+        let staleCount = 0;
+        let neverCount = 0;
+
+        approachSections.forEach((approach) => {
+          const card = document.createElement('div');
+          card.className = 'approach-card';
+
+          const header = document.createElement('div');
+          header.className = 'approach-header';
+          const title = document.createElement('h3');
+          title.textContent = approach.label;
+          header.appendChild(title);
+
+          const approachCounts = approachSummary && typeof approachSummary === 'object'
+            ? approachSummary[approach.id]
+            : null;
+          const counts = approachCounts?.counts || { total: 0, success: 0, failed: 0, running: 0 };
+          const bits = [];
+          bits.push(`${counts.running} running`);
+          bits.push(`${counts.failed} failing`);
+          if (approach.planned) bits.push(`${approach.planned} planned`);
+          if (counts.total) bits.push(`${counts.total} runs tracked`);
+          const metaNode = document.createElement('div');
+          metaNode.className = 'approach-meta';
+          metaNode.textContent = bits.join(' · ');
+          header.appendChild(metaNode);
+          card.appendChild(header);
+
+          if (approach.description) {
+            const desc = document.createElement('div');
+            desc.className = 'approach-description';
+            desc.textContent = approach.description;
+            card.appendChild(desc);
+          }
+
+          if (approach.id === 'sequence') {
+            const summaryNode = buildSequenceSummaryNode();
+            if (summaryNode) card.appendChild(summaryNode);
+          } else if (approach.id === 'boosting') {
+            const summaryNode = buildBoostingSummaryNode();
+            if (summaryNode) card.appendChild(summaryNode);
+          } else if (approach.id === 'hmm') {
+            const summaryNode = buildHmmSummaryNode();
+            if (summaryNode) card.appendChild(summaryNode);
+          }
+
+          const grid = document.createElement('div');
+          grid.className = 'row g-3';
+
+          approach.groups.forEach((group) => {
+            const defs = group.definitions || [];
+            if (defs.length === 0) return;
+            const col = document.createElement('div');
+            col.className = 'col-12 col-xl-6';
+            const wrapper = document.createElement('div');
+            wrapper.className = 'pipeline-group-card h-100';
+            const body = document.createElement('div');
+            body.className = 'card-body';
+            body.innerHTML = `<div class="pipeline-group-title">${escapeHtml(group.name)}</div>`;
+            const jobsContainer = document.createElement('div');
+            jobsContainer.className = 'd-flex flex-column';
+
+            defs.forEach((def) => {
+              const summary = jobSummary[def.id];
+              const statusKey = statusFor(summary, def);
+              if (statusKey === 'running') runningCount += 1;
+              else if (statusKey === 'failed') failedCount += 1;
+              else if (statusKey === 'stale') staleCount += 1;
+              else if (statusKey === 'never') neverCount += 1;
+              const cfg = statusClasses[statusKey] || statusClasses.unknown;
+              const latest = summary?.latest || null;
+              const lastTs = latest?.finished_at || latest?.started_at || latest?.updated_at || null;
+              const logLink = latest?.logfile
+                ? `<a class="log-link" href="/api/logs?file=${encodeURIComponent(latest.logfile)}" target="_blank">${escapeHtml(latest.logfile)}</a>`
+                : '—';
+              const paramsText = formatParamsText(latest?.params);
+              const detailItems = Array.isArray(def.details) ? def.details.slice(0, 3) : [];
+              const remainder = Array.isArray(def.details) ? Math.max(0, def.details.length - detailItems.length) : 0;
+              const detailHtml = detailItems.length
+                ? `<ul class="pipeline-details">${detailItems.map((d) => `<li>${escapeHtml(d)}</li>`).join('')}${remainder ? `<li>+${remainder} more…</li>` : ''}</ul>`
+                : '';
+              const startDisabled = def.enabled === false;
+              const startLabel = startDisabled ? 'Coming Soon' : 'Start';
+              const startAttrs = startDisabled ? 'disabled' : `data-job-id="${escapeHtml(def.id)}"`;
+              const jobDiv = document.createElement('div');
+              jobDiv.className = `pipeline-job pipeline-job--${statusKey}`;
+              jobDiv.innerHTML = `
+                <div class="pipeline-job-header">
+                  <div>
+                    <h3>${escapeHtml(def.label || def.id)}</h3>
+                    <div class="pipeline-job-desc">${escapeHtml(def.description || 'No description provided')}</div>
+                  </div>
+                  <span class="badge ${cfg.badge} badge-status">${cfg.label}</span>
+                </div>
+                <div class="pipeline-metrics">
+                  <div><span class="text-muted">Last run:</span> ${lastTs ? `${fmtDate(lastTs)} (${fmtRelative(lastTs)})` : 'Never'}</div>
+                  <div><span class="text-muted">Duration:</span> ${fmtDuration(latest?.duration_s)}</div>
+                  <div><span class="text-muted">Success rate:</span> ${formatSuccessRate(summary)}</div>
+                </div>
+                <div class="pipeline-actions">
+                  <div class="text-muted">Last log: ${logLink}</div>
+                  <div class="btn-group">
+                    <button type="button" class="btn btn-outline-primary btn-sm pipeline-start-btn" ${startAttrs}>${startLabel}</button>
+                    ${statusKey === 'running' && latest?.logfile && !startDisabled ? `<button type="button" class="btn btn-outline-danger btn-sm pipeline-kill-btn" data-logfile="${escapeHtml(latest.logfile)}">Kill</button>` : ''}
+                  </div>
+                </div>
+                ${paramsText ? `<div class="text-muted mt-2 small">Active params: ${escapeHtml(paramsText)}</div>` : ''}
+                ${detailHtml}
+              `;
+              jobsContainer.appendChild(jobDiv);
+            });
+
+            if (!jobsContainer.children.length) {
+              jobsContainer.innerHTML = '<div class="text-muted small">No jobs configured in this group.</div>';
+            }
+
+            body.appendChild(jobsContainer);
+            wrapper.appendChild(body);
+            col.appendChild(wrapper);
+            grid.appendChild(col);
+          });
+
+          if (!grid.children.length) {
+            const empty = document.createElement('div');
+            empty.className = 'col-12 text-muted small';
+            empty.textContent = 'No jobs configured for this approach yet.';
+            grid.appendChild(empty);
+          }
+
+          card.appendChild(grid);
+          container.appendChild(card);
+        });
+
+        if (meta) {
+          const bits = [];
+          bits.push(`${runningCount} running`);
+          bits.push(`${failedCount} failing`);
+          if (staleCount) bits.push(`${staleCount} stale`);
+          if (neverCount) bits.push(`${neverCount} never run`);
+          if (generatedAt) bits.push(`Updated ${fmtDate(generatedAt)}`);
+          else bits.push(`Updated ${new Date().toLocaleTimeString()}`);
+          meta.textContent = bits.join(' · ');
+        }
+
+        attachPipelineStartHandlers();
+      }
+
+      function setCounts(builds) {
+        const total = builds.length;
+        const success = builds.filter(b => b.status === 'success').length;
+        const failed = builds.filter(b => b.status === 'failed').length;
+        const running = builds.filter(b => b.status === 'running').length;
+        document.getElementById('countTotal').textContent = total;
+        document.getElementById('countSuccess').textContent = success;
+        document.getElementById('countFailed').textContent = failed;
+        document.getElementById('countRunning').textContent = running;
+        const meta = document.getElementById('buildCountMeta');
+        if (total === 0) {
+          meta.textContent = 'No builds found';
+        } else {
+          const latest = builds[0]?.started_at;
+          meta.textContent = latest ? `Latest build started ${fmtDate(latest)}` : `${total} builds`;
+        }
+      }
+
+      function renderTable(builds) {
+        const tbody = document.querySelector('#buildsTable tbody');
+        tbody.innerHTML = '';
+        if (builds.length === 0) {
+          const row = document.createElement('tr');
+          row.innerHTML = '<td colspan="6" class="text-muted">No build logs discovered.</td>';
+          tbody.appendChild(row);
+          return;
+        }
+        for (const build of builds) {
+          const row = document.createElement('tr');
+          const cfg = statusClasses[build.status] || statusClasses.unknown;
+          if (build.active) row.classList.add('table-info');
+          const jobLabel = escapeHtml(build.job_label || build.job || build.id);
+          const paramsTooltip = build.params ? escapeHtml(JSON.stringify(build.params)) : '';
+          const logHref = `/api/logs?file=${encodeURIComponent(build.logfile)}`;
+          const killDisabled = Boolean(build.kill_requested_at);
+          const killLabel = killDisabled ? 'Killing…' : 'Kill';
+          const killButton = build.active ? `<button type="button" class="btn btn-sm btn-outline-danger ms-2 kill-btn" data-logfile="${escapeHtml(build.logfile)}" ${killDisabled ? 'disabled' : ''}>${killLabel}</button>` : '';
+          row.innerHTML = `
+            <td><span class="log-link" title="${paramsTooltip}">${jobLabel}</span></td>
+            <td><span class="status-dot ${cfg.dot}"></span><span class="badge ${cfg.badge} badge-status">${cfg.label}</span></td>
+            <td>${fmtDate(build.started_at)}</td>
+            <td>${fmtDate(build.finished_at)}</td>
+            <td>${fmtDuration(build.duration_s)}</td>
+            <td><a class="log-link" href="${logHref}" target="_blank">${escapeHtml(build.logfile)}</a>${killButton}</td>
+          `;
+          tbody.appendChild(row);
+        }
+        attachKillHandlers();
+      }
+
+      async function killBuild(logfile, button) {
+        if (!logfile) return;
+        if (!window.confirm('Stop this build?')) return;
+        const status = document.getElementById('startStatus');
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Killing…';
+        if (status) {
+          status.textContent = 'Kill requested…';
+          status.classList.remove('text-muted', 'text-success', 'text-danger');
+          status.classList.add('text-muted');
+        }
+        let succeeded = false;
+        try {
+          const res = await fetch('/api/builds/kill', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ logfile }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.ok === false) {
+            if (status) {
+              status.textContent = data.error || 'Failed to kill build';
+              status.classList.remove('text-muted', 'text-success');
+              status.classList.add('text-danger');
+            }
+          } else {
+            if (status) {
+              status.textContent = 'Kill signal sent';
+              status.classList.remove('text-muted', 'text-danger');
+              status.classList.add('text-success');
+            }
+            succeeded = true;
+            refresh();
+          }
+        } catch (err) {
+          if (status) {
+            status.textContent = err?.message || 'Failed to kill build';
+            status.classList.remove('text-muted', 'text-success');
+            status.classList.add('text-danger');
+          }
+        } finally {
+          if (succeeded) {
+            button.textContent = 'Killing…';
+          } else {
+            button.disabled = false;
+            button.textContent = original;
+          }
+        }
+      }
+
+      function attachKillHandlers() {
+        document.querySelectorAll('.kill-btn').forEach((btn) => {
+          if (btn.dataset.bound === '1') return;
+          btn.dataset.bound = '1';
+          btn.addEventListener('click', () => {
+            const logfile = btn.getAttribute('data-logfile');
+            killBuild(logfile, btn);
+          });
+        });
+      }
+
+      function showError(msg) {
+        const alert = document.getElementById('alert');
+        alert.textContent = msg;
+        alert.classList.remove('d-none');
+      }
+
+      function clearError() {
+        const alert = document.getElementById('alert');
+        alert.classList.add('d-none');
+      }
+
+      async function fetchBuilds() {
+        const res = await fetch('/api/builds', { cache: 'no-store' });
+        if (!res.ok) throw new Error('Failed to fetch builds');
+        return res.json();
+      }
+
+      async function refresh() {
+        try {
+          clearError();
+          const data = await fetchBuilds();
+          if (Array.isArray(data.definitions)) {
+            ensureForm(data.definitions);
+          }
+          await Promise.all([
+            fetchSequenceModelInfo(),
+            fetchBoostingModelInfo(),
+            fetchHmmInfo(),
+          ]);
+          approachMeta = Array.isArray(data.approaches) ? data.approaches : [];
+          updateApproachSections();
+          const builds = data.builds || [];
+          setCounts(builds);
+          renderTable(builds);
+          renderPipelineOverview(builds, data.overview, data.overview?.generated_at);
+          document.getElementById('lastUpdated').textContent = `Last updated ${new Date().toLocaleTimeString()}`;
+        } catch (err) {
+          console.error(err);
+          showError(err.message || 'Unable to refresh builds');
+        }
+      }
+
+      function setupTimer() {
+        if (timer) clearInterval(timer);
+        const auto = document.getElementById('autoRefresh').checked;
+        const interval = Math.max(5, parseInt(document.getElementById('refreshInterval').value || '15', 10));
+        if (auto) timer = setInterval(refresh, interval * 1000);
+      }
+
+      document.getElementById('refreshBtn').addEventListener('click', refresh);
+      document.getElementById('autoRefresh').addEventListener('change', setupTimer);
+      document.getElementById('refreshInterval').addEventListener('change', setupTimer);
+
+      refresh();
+      setupTimer();
+    </script>
+  </body>
+</html>
