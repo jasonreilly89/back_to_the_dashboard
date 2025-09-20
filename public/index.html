@@ -131,6 +131,7 @@
               <div class="row g-2">
                 <div class="col-12">
                   <div id="runsContent" class="text-muted">Loading…</div>
+                  <div id="runDetail" class="mt-3 text-muted small">Select a run to view details.</div>
                 </div>
                 <div class="col-12">
                   <canvas id="runsChart" height="150" class="mt-2"></canvas>
@@ -278,7 +279,7 @@
         } catch (e) { $('health').textContent = 'Health check failed'; }
       }
 
-      // Gated run summary: compare latest gated vs baseline
+      // Gated run summary: compare whitelist vs baseline
       async function loadGatingSummary() {
         const div = $('gatingSummary');
         const tb = $('gatingTbl').querySelector('tbody');
@@ -286,31 +287,22 @@
         try {
           const runs = await json('/api/runs');
           if (!runs.length) { div.textContent = 'No runs yet.'; return; }
-          const isGated = (name) => /gated/i.test(String(name||''));
-          const gated = runs.find(r => isGated(r.run));
-          const baseline = runs.find(r => !isGated(r.run) && (/baseline|breakout/i.test(String(r.run||'')) )) || runs.find(r => !isGated(r.run) && (!gated || r.run !== gated.run));
+          const whitelistRun = runs.find(r => r.summary && Array.isArray(r.summary.tod_whitelist));
+          const baselineRun = runs.find(r => !r.summary || !r.summary.tod_whitelist);
           const rows = [];
-          if (baseline) rows.push({ label: 'Baseline', r: baseline });
-          if (gated) rows.push({ label: 'Gated', r: gated });
+          if (baselineRun) rows.push({ label: 'Baseline', id: baselineRun.id, summary: baselineRun.summary || {} });
+          if (whitelistRun) rows.push({ label: 'Whitelisted', id: whitelistRun.id, summary: whitelistRun.summary || {} });
           if (!rows.length) { div.textContent = 'No matching runs.'; return; }
           div.textContent = '';
-          const metrics = (s) => ({ tc: s?.trade_count ?? null, net: Number(s?.net ?? NaN), sh: Number(s?.after_cost_sharpe ?? NaN) });
           for (const row of rows) {
-            const s = row.r.summary || {};
-            const m = metrics(s);
+            const s = row.summary;
+            const trades = Number.isFinite(s.num_trades) ? s.num_trades : (s.trade_count ?? '—');
+            const pnl = Number.isFinite(s.total_pnl) ? s.total_pnl.toFixed(2) : '—';
+            const hit = Number.isFinite(s.hit_ratio) ? (s.hit_ratio * 100).toFixed(1) + '%' : '—';
+            const whitelist = Array.isArray(s.tod_whitelist) ? s.tod_whitelist.map(b => `${b.start}-${b.end}`).join(', ') : '—';
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td title='${row.r.run}'>${row.label}</td><td class='text-end'>${(s.trade_count??'')}</td><td class='text-end'>${Number.isFinite(m.net)?m.net.toFixed(2):'—'}</td><td class='text-end'>${Number.isFinite(m.sh)?m.sh.toFixed(3):'—'}</td>`;
+            tr.innerHTML = `<td title='${row.id}'>${row.label}</td><td class='text-end'>${trades}</td><td class='text-end'>${pnl}</td><td class='text-end'>${hit}</td><td>${whitelist}</td>`;
             tb.appendChild(tr);
-          }
-          if (rows.length === 2) {
-            const a = metrics(rows[0].r.summary||{});
-            const b = metrics(rows[1].r.summary||{});
-            const dTr = document.createElement('tr');
-            const dNet = (Number.isFinite(a.net) && Number.isFinite(b.net)) ? (b.net - a.net) : null;
-            const dSh = (Number.isFinite(a.sh) && Number.isFinite(b.sh)) ? (b.sh - a.sh) : null;
-            const dTc = ((rows[1].r.summary?.trade_count ?? null) != null && (rows[0].r.summary?.trade_count ?? null) != null) ? (rows[1].r.summary.trade_count - rows[0].r.summary.trade_count) : null;
-            dTr.innerHTML = `<td>Δ</td><td class='text-end'>${dTc ?? '—'}</td><td class='text-end'>${dNet!=null?dNet.toFixed(2):'—'}</td><td class='text-end'>${dSh!=null?dSh.toFixed(3):'—'}</td>`;
-            tb.appendChild(dTr);
           }
           $('gatingUpdated').textContent = new Date().toLocaleTimeString();
         } catch (e) {
@@ -415,54 +407,96 @@
           if (!runs.length) { div.textContent = 'No runs yet.'; return; }
           const count = Math.max(1, Math.min(100, parseInt(($('runCount').value||'10'),10)));
           const filter = ($('runFilter').value||'').trim().toLowerCase();
-          const filtered = runs.filter(r => !filter || String(r.run).toLowerCase().includes(filter));
+          const filtered = runs.filter(r => !filter || String(r.id).toLowerCase().includes(filter));
           const rows = filtered.slice(0, count);
 
           const tbl = document.createElement('table');
           tbl.className = 'table table-sm table-striped align-middle runs-table';
           tbl.innerHTML = `<thead><tr>
-            <th>Run</th><th class='text-end'>Trades</th><th class='text-end'>Net</th><th class='text-end'>Sharpe</th><th class='text-end'>t</th><th class='text-end'>Tail</th><th>λ/γ/k</th><th>Actions</th>
+            <th>Run</th><th class='text-end'>Trades</th><th class='text-end'>PnL</th><th class='text-end'>Hit%</th><th>Whitelist</th><th>Summary</th>
           </tr></thead>`;
           const tb = document.createElement('tbody');
           for (const r of rows) {
             const s = r.summary || {};
             const tr = document.createElement('tr');
-            const params = r.params || {};
-            const paramCell = [params.cp_lambda, params.cp_thr, params.break_k_atr].map(x=> (typeof x==='number'? x.toFixed(2): '')).join(' / ');
-            const rep = `/runs/${encodeURIComponent(r.run)}/report.html`;
-            const sum = `/runs/${encodeURIComponent(r.run)}/summary.json`;
-            const cfg = `/runs/${encodeURIComponent(r.run)}/resolved.yaml`;
-            tr.innerHTML = `<td title='${r.run}'><a class='cell-run' href='${rep}' target='_blank'>${r.run}</a></td>
-              <td class='text-end'>${s.trade_count||0}</td>
-              <td class='text-end'>${fmtNum(s.net,2)}</td>
-              <td class='text-end'>${fmtNum(s.after_cost_sharpe,3)}</td>
-              <td class='text-end'>${fmtNum(s.t_stat,2)}</td>
-              <td class='text-end'>${fmtNum(s.tail_ratio,2)}</td>
-              <td>${paramCell}</td>
+            const rep = `/runs/${encodeURIComponent(r.id)}/report.html`;
+            const sum = `/api/runs/${encodeURIComponent(r.id)}/summary`;
+            const trades = Number.isFinite(s.num_trades) ? s.num_trades : (s.trade_count ?? 0);
+            const pnl = Number.isFinite(s.total_pnl) ? s.total_pnl.toFixed(2) : '—';
+            const hit = Number.isFinite(s.hit_ratio) ? (s.hit_ratio * 100).toFixed(1) + '%' : '—';
+            const whitelist = Array.isArray(s.tod_whitelist) ? s.tod_whitelist.map(b => `${b.start}-${b.end}`).join(', ') : '—';
+            tr.innerHTML = `<td title='${r.id}'><a class='cell-run' href='${rep}' target='_blank'>${r.id}</a></td>
+              <td class='text-end'>${trades}</td>
+              <td class='text-end'>${pnl}</td>
+              <td class='text-end'>${hit}</td>
+              <td>${whitelist}</td>
               <td class='actions text-nowrap'>
-                <a href='${rep}' target='_blank' title='Open report'>📄</a>
-                <a href='${cfg}' target='_blank' title='Resolved config (YAML)'>🧩</a>
-                <a href='${sum}' target='_blank' title='Summary JSON'>🧾</a>
+                <a href='${sum}' target='_blank' title='JSON summary'>🧾</a>
               </td>`;
+            tr.style.cursor = 'pointer';
+            tr.addEventListener('click', () => showRunDetail(r.id));
             tb.appendChild(tr);
           }
           tbl.appendChild(tb); div.innerHTML = ''; div.appendChild(tbl);
+          if (rows[0]) { await showRunDetail(rows[0].id); }
 
-          // Chart top runs by Sharpe (fallback to Net)
           const topForChart = rows
-            .map(r => ({ name: r.run, sharpe: Number(r.summary?.after_cost_sharpe), net: Number(r.summary?.net) }))
-            .map(o => ({ ...o, score: Number.isFinite(o.sharpe) ? o.sharpe : (Number.isFinite(o.net) ? o.net : null) }))
-            .filter(o => o.score !== null)
+            .map(r => ({ name: r.id, score: Number(r.summary?.total_pnl) }))
+            .filter(o => Number.isFinite(o.score))
             .slice(0, Math.min(10, rows.length));
           const labels = topForChart.map(o => o.name.split('/').slice(-1)[0]);
           const data = topForChart.map(o => o.score);
           const ctx = $('runsChart').getContext('2d');
-          const opts = { responsive: true, scales: { x: { ticks: { display: false } }, y: { beginAtZero: false } }, plugins: { legend: { display:false }, tooltip: { callbacks: { label: (c)=>` ${c.parsed.y.toFixed(3)}` } } } };
-          if (!runsChart) { runsChart = new Chart(ctx, { type: 'bar', data: { labels, datasets: [{ label:'Score', data, backgroundColor: 'rgba(25, 118, 210, 0.6)' }] }, options: opts }); }
+          const opts = { responsive: true, scales: { x: { ticks: { display: false } }, y: { beginAtZero: false } }, plugins: { legend: { display:false }, tooltip: { callbacks: { label: (c)=>` ${c.parsed.y.toFixed(2)}` } } } };
+          if (!runsChart) { runsChart = new Chart(ctx, { type: 'bar', data: { labels, datasets: [{ label:'PnL', data, backgroundColor: 'rgba(25, 118, 210, 0.6)' }] }, options: opts }); }
           else { runsChart.data.labels = labels; runsChart.data.datasets[0].data = data; runsChart.update('none'); }
           $('runsUpdated').textContent = new Date().toLocaleTimeString();
         } catch (e) {
           $('runsContent').textContent = 'Failed to load runs';
+        }
+      }
+
+      async function showRunDetail(runId) {
+        const detail = $('runDetail');
+        if (!runId) { detail.textContent = 'Select a run to view details.'; return; }
+        detail.textContent = `Loading ${runId}…`;
+        try {
+          const [summary, equity, tradesRes, roundTrips] = await Promise.all([
+            json(`/api/runs/${encodeURIComponent(runId)}/summary`),
+            json(`/api/runs/${encodeURIComponent(runId)}/equity`).catch(() => []),
+            json(`/api/runs/${encodeURIComponent(runId)}/trades?limit=10`).catch(() => ({ trades: [] })),
+            json(`/api/runs/${encodeURIComponent(runId)}/roundtrips`).catch(() => []),
+          ]);
+          const trades = tradesRes.trades || tradesRes;
+          const lastEquity = Array.isArray(equity) && equity.length ? equity[equity.length - 1].equity : null;
+          const rows = [];
+          rows.push(`<div><strong>Run:</strong> ${runId}</div>`);
+          rows.push(`<div><strong>Trades:</strong> ${summary.num_trades ?? summary.trade_count ?? 0} · <strong>PnL:</strong> ${Number.isFinite(summary.total_pnl)?summary.total_pnl.toFixed(2):'—'} · <strong>Hit:</strong> ${Number.isFinite(summary.hit_ratio)?(summary.hit_ratio*100).toFixed(1)+'%':'—'}</div>`);
+          rows.push(`<div><strong>Last Equity:</strong> ${Number.isFinite(lastEquity)?Number(lastEquity).toFixed(2):'—'}</div>`);
+          if (Array.isArray(summary.tod_whitelist)) {
+            const wl = summary.tod_whitelist.map(b => `${b.start}-${b.end}`).join(', ');
+            rows.push(`<div><strong>Whitelist:</strong> ${wl}</div>`);
+          }
+          if (trades.length) {
+            const tbl = document.createElement('table');
+            tbl.className = 'table table-sm mb-2';
+            tbl.innerHTML = '<thead><tr><th>Entry</th><th>Exit</th><th>Side</th><th class="text-end">PnL</th></tr></thead>';
+            const tb = document.createElement('tbody');
+            for (const t of trades) {
+              const tr = document.createElement('tr');
+              tr.innerHTML = `<td>${t.entry_time||''}</td><td>${t.exit_time||''}</td><td>${t.side||''}</td><td class='text-end'>${Number.isFinite(Number(t.pnl))?Number(t.pnl).toFixed(2):t.pnl||''}</td>`;
+              tb.appendChild(tr);
+            }
+            tbl.appendChild(tb);
+            rows.push(tbl.outerHTML);
+          }
+          if (Array.isArray(roundTrips) && roundTrips.length) {
+            const first = roundTrips[0];
+            rows.push(`<div class='small text-muted'>Round-trip sample: hold=${first.hold_seconds ?? '—'}s · pnl=${Number.isFinite(first.pnl)?Number(first.pnl).toFixed(2):first.pnl}</div>`);
+          }
+          detail.innerHTML = rows.join('');
+        } catch (e) {
+          detail.textContent = `Failed to load run detail: ${e}`;
         }
       }
 

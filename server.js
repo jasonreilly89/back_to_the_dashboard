@@ -5,11 +5,14 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { spawn } = require('child_process');
 
+const readers = require('./lib/readers');
+
 const app = express();
 const PORT = process.env.PORT || 4100;
 
 // Where the TEST_BOCPD repo lives so we can read artifacts
-const REPO = process.env.TEST_BOCPD_DIR || '/home/jason/ml/test_bocpd';
+const EXPERIMENTS_DIR = process.env.ALPHA_EXPERIMENTS_DIR || '/home/jason/ml/alpha-experiments';
+const REPO = process.env.TEST_BOCPD_DIR || EXPERIMENTS_DIR;
 const KANBAN = process.env.KANBAN_BASE || 'http://localhost:4000';
 const BUILD_PY = process.env.BUILD_PY || '/home/jason/venvs/torchbuild/bin/python';
 const SEQUENCE_MODEL_DIR = process.env.SEQUENCE_MODEL_DIR || 'artifacts/models/sequence_cnn';
@@ -26,6 +29,10 @@ const API_ENDPOINTS = [
   { method: 'POST', path: '/api/builds/kill', description: 'Request termination of an active job' },
   { method: 'GET', path: '/api/sweeps', description: 'List lambda sweep manifests' },
   { method: 'GET', path: '/api/runs', description: 'Enumerate recent backtest runs' },
+  { method: 'GET', path: '/api/runs/:id/summary', description: 'Fetch summary.json for a run' },
+  { method: 'GET', path: '/api/runs/:id/equity', description: 'Stream equity.csv for a run' },
+  { method: 'GET', path: '/api/runs/:id/trades', description: 'Paginate trades.csv for a run' },
+  { method: 'GET', path: '/api/runs/:id/roundtrips', description: 'Derive round-trip stats from trades' },
   { method: 'GET', path: '/api/latest-run', description: 'Return most recent run summary' },
   { method: 'GET', path: '/api/logs', description: 'Browse raw pipeline log files' },
   { method: 'GET', path: '/api/autotune', description: 'Summarize autotune sweep logs' },
@@ -566,9 +573,11 @@ app.get('/api', (req, res) => {
 app.get('/api/health', async (req, res) => {
   try {
     const st = await fsp.stat(REPO);
-    res.json({ ok: true, repo: REPO, exists: st.isDirectory(), kanban: KANBAN });
+    const runsOk = await fsp.stat(readers.RUNS_ROOT).then((s) => s.isDirectory()).catch(() => false);
+    res.json({ ok: st.isDirectory() && runsOk, repo: REPO, runs_root: readers.RUNS_ROOT, runs_ok: runsOk, kanban: KANBAN });
   } catch (e) {
-    res.json({ ok: false, repo: REPO, error: String(e), kanban: KANBAN });
+    const runsOk = await fsp.stat(readers.RUNS_ROOT).then((s) => s.isDirectory()).catch(() => false);
+    res.json({ ok: false, repo: REPO, runs_root: readers.RUNS_ROOT, runs_ok: runsOk, error: String(e), kanban: KANBAN });
   }
 });
 
@@ -642,33 +651,59 @@ app.get('/api/sweeps', async (req, res) => {
 
 app.get('/api/runs', async (req, res) => {
   try {
-    const runsRoot = path.join(REPO, 'runs');
-    const entries = await fsp.readdir(runsRoot, { withFileTypes: true }).catch(() => []);
-    const out = [];
-    for (const ent of entries) {
-      if (!ent.isDirectory()) continue;
-      const dir = path.join(runsRoot, ent.name);
-      const summaryPath = path.join(dir, 'summary.json');
-      const summary = await readJsonSafe(summaryPath);
-      // Lightly parse key params from resolved.yaml if present
-      let params = {};
-      try {
-        const txt = await fsp.readFile(path.join(dir, 'resolved.yaml'), 'utf8');
-        const rx = /(cp_lambda|cp_thr|break_k_atr|lookback_n|min_edge_pts):\s*([0-9.]+)/g;
-        let m; params = {};
-        while ((m = rx.exec(txt))) { params[m[1]] = Number(m[2]); }
-      } catch {}
-      if (summary) {
-        const st = await fsp.stat(summaryPath).catch(() => null);
-        const mtime = st ? st.mtimeMs : 0;
-        out.push({ run: ent.name, summary, mtime, params });
-      }
-    }
-    // sort newest first by file mtime (more reliable than lexicographic name)
-    out.sort((a, b) => (b.mtime - a.mtime) || String(b.run).localeCompare(String(a.run)));
-    res.json(out);
+    const ids = await readers.listRuns();
+    const items = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const summary = await readers.readSummary(id);
+          return { id, summary };
+        } catch (err) {
+          return { id, summary: null };
+        }
+      })
+    );
+    res.json(items);
   } catch (e) {
     res.status(500).json({ error: 'failed to list runs', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/summary', async (req, res) => {
+  try {
+    const summary = await readers.readSummary(req.params.runId);
+    res.json(summary);
+  } catch (e) {
+    res.status(404).json({ error: 'summary not found', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/equity', async (req, res) => {
+  try {
+    const equity = await readers.readEquity(req.params.runId);
+    res.json(equity);
+  } catch (e) {
+    res.status(404).json({ error: 'equity not found', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/trades', async (req, res) => {
+  try {
+    const limit = Number.parseInt(req.query.limit, 10) || 200;
+    const offset = Number.parseInt(req.query.offset, 10) || 0;
+    const trades = await readers.readTrades(req.params.runId, { limit, offset });
+    res.json({ trades, limit, offset });
+  } catch (e) {
+    res.status(404).json({ error: 'trades not found', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/roundtrips', async (req, res) => {
+  try {
+    const trades = await readers.readTrades(req.params.runId, { limit: 1000, offset: 0 });
+    const trips = readers.deriveRoundTrips(trades);
+    res.json(trips);
+  } catch (e) {
+    res.status(404).json({ error: 'roundtrips unavailable', detail: String(e) });
   }
 });
 
