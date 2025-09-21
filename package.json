@@ -1,0 +1,14 @@
+{
+  "name": "back-to-the-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lightweight dashboard to track TEST_BOCPD progress and results",
+  "scripts": {
+    "start": "export KANBAN_BASE=localhost:4000 && node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
+

@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.log
+
+scripts/
+*.sh
+*.py
+
+# Local build outputs
+static/dist/
+.venv/
+node_modules/
+package-lock.json

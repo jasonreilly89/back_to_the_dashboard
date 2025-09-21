@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BOCPD Progress Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <script src="/vendor/chart.js/chart.umd.min.js?v=20250916"></script>
+    <style>
+      body { background:#f8f9fa; }
+      .card { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+      .muted { color:#6c757d; }
+      pre { background:#0c1021; color:#e6e6e6; padding:12px; border-radius:6px; max-height:260px; overflow:auto; }
+      .status-pills .badge { font-weight:500; }
+      .skeleton { background: linear-gradient(90deg, #eee, #f5f5f5, #eee); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+      @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+      .table td, .table th { vertical-align: middle; }
+      .actions a { text-decoration:none; margin-right:6px; }
+      .badge-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #runsContent { overflow-x: auto; }
+      .runs-table { width: 100%; table-layout: auto; }
+      .cell-run { max-width: 220px; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <div class="container py-4">
+      <div class="d-flex flex-wrap gap-3 justify-content-between align-items-center mb-3">
+        <div>
+          <h1 class="h3 m-0">BOCPD Progress Dashboard</h1>
+          <div class="small text-muted" id="health">Checking repository…</div>
+        </div>
+        <div class="d-flex gap-2 align-items-end">
+          <div class="form-check me-2">
+            <input id="autoRefresh" class="form-check-input" type="checkbox" checked>
+            <label class="form-check-label" for="autoRefresh">Auto-refresh</label>
+          </div>
+          <div class="input-group input-group-sm" style="width:160px">
+            <span class="input-group-text">Interval</span>
+            <input id="refreshInterval" type="number" class="form-control" value="10" min="2">
+            <span class="input-group-text">s</span>
+          </div>
+          <a class="btn btn-outline-secondary btn-sm" href="/autotune.html">Autotune</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/wfo.html">WFO</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/kanban.html">Kanban</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/monitors.html">Monitors</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/builds.html">Builds</a>
+          <button id="refreshBtn" class="btn btn-primary btn-sm">Refresh All</button>
+        </div>
+      </div>
+
+      <div id="alert" class="alert alert-danger d-none" role="alert"></div>
+
+      <div class="row g-3">
+        <div class="col-12 col-lg-6">
+          <div class="card h-100" id="sweepCard">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Lambda Sweep</h2>
+                <span class="small text-muted" id="sweepUpdated">—</span>
+              </div>
+              <div id="sweepContent" class="text-muted">Loading…</div>
+              <canvas id="sweepChart" height="120" class="mt-2"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="card h-100" id="kanbanCard">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Kanban Overview</h2>
+                <span class="small text-muted" id="kanbanUpdated">—</span>
+              </div>
+              <div id="kanbanContent" class="text-muted">Loading…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-12 col-lg-6">
+          <div class="card h-100" id="wfoSummaryCard">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">WFO Summary</h2>
+                <span class="small text-muted" id="wfoUpdated">—</span>
+              </div>
+              <div id="wfoSummary" class="text-muted">Loading…</div>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm" id="wfoStepsTbl">
+                  <thead><tr><th>Step</th><th>λ</th><th>cp_thr</th><th>k</th><th class="text-end">Sharpe</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="card h-100" id="gatingCard">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Gated Run Summary</h2>
+                <span class="small text-muted" id="gatingUpdated">—</span>
+              </div>
+              <div id="gatingSummary" class="text-muted">Loading…</div>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm" id="gatingTbl">
+                  <thead><tr><th>Run</th><th class="text-end">Trades</th><th class="text-end">Net</th><th class="text-end">Sharpe</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-12 col-xl-8">
+          <div class="card h-100" id="runsCard">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Recent Runs</h2>
+                <div class="d-flex gap-2 align-items-center">
+                  <input id="runFilter" class="form-control form-control-sm" style="width:180px" placeholder="Filter runs" />
+                  <div class="input-group input-group-sm" style="width:150px">
+                    <span class="input-group-text">Show</span>
+                    <input id="runCount" type="number" class="form-control" value="10" min="1" max="100">
+                  </div>
+                  <span class="small text-muted" id="runsUpdated">—</span>
+                </div>
+              </div>
+              <div class="row g-2">
+                <div class="col-12">
+                  <div id="runsContent" class="text-muted">Loading…</div>
+                  <div id="runDetail" class="mt-3 text-muted small">Select a run to view details.</div>
+                </div>
+                <div class="col-12">
+                  <canvas id="runsChart" height="150" class="mt-2"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-xl-4">
+          <div class="card h-100" id="sweepCard2">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">cp Sweep Results</h2>
+                <div class="d-flex gap-2 align-items-center">
+                  <select id="cpKeySelect" class="form-select form-select-sm" style="width: 180px"></select>
+                  <span class="small text-muted" id="cpUpdated">—</span>
+                </div>
+              </div>
+              <div id="sweepBest" class="text-muted">Loading…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-12 col-xl-6">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Sweep Leaders</h2>
+                <span class="small text-muted" id="leadersUpdated">—</span>
+              </div>
+              <div id="leadersContent" class="text-muted">Loading…</div>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm" id="leadersTbl">
+                  <thead><tr><th>λ</th><th>cp_thr</th><th>k</th><th class="text-end">trades</th><th class="text-end">net</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-xl-6">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Production</h2>
+                <span class="small text-muted" id="prodUpdated">—</span>
+              </div>
+              <div id="prodContent" class="text-muted">Loading…</div>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm" id="prodTbl">
+                  <thead><tr><th>λ</th><th>cp_thr</th><th>k</th><th>trail</th><th>hold(s)</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-12 col-xl-6">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Detection Metrics</h2>
+                <span class="small text-muted" id="detectUpdated">—</span>
+              </div>
+              <div id="detectContent" class="text-muted">Loading…</div>
+              <canvas id="detectChart" height="120" class="mt-2"></canvas>
+              <div class="mt-3">
+                <h6 class="h6">Delay Histogram</h6>
+                <div id="delayInfo" class="text-muted">—</div>
+                <canvas id="delayChart" height="120" class="mt-2"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-xl-6">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Segment Length (ToD)</h2>
+              </div>
+              <div id="ttncContent" class="text-muted">Loading…</div>
+              <canvas id="ttncChart" height="120" class="mt-2"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-12">
+          <div class="card h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Ablation: Confirmation & Cooldown</h2>
+                <span class="small text-muted" id="ablationUpdated">—</span>
+              </div>
+              <div id="ablationContent" class="text-muted">Loading…</div>
+              <canvas id="ablationChart" height="120" class="mt-2"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-12 col-lg-6">
+          <div class="card h-100" id="logsCard">
+            <div class="card-body">
+              <h2 class="h5">Pipeline Logs</h2>
+              <div id="logsList" class="text-muted">Loading…</div>
+              <pre id="logPreview" class="mt-2"></pre>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6">
+          <div class="card h-100" id="dsValCard">
+            <div class="card-body">
+              <h2 class="h5">Dataset Validation</h2>
+              <div id="dsVal" class="text-muted">Loading…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      function fmtNum(n, d=2) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
+      async function json(url) { const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) throw new Error(url+': '+r.status); return r.json(); }
+      function setAlert(msg) { const a=$('alert'); if (!msg) { a.classList.add('d-none'); a.textContent=''; } else { a.textContent=msg; a.classList.remove('d-none'); } }
+      // Bubble JS errors to the alert for quick diagnosis
+      window.addEventListener('error', (e) => { try { setAlert(`JS error: ${e.message||e.error}`); } catch {} });
+      window.addEventListener('unhandledrejection', (e) => { try { setAlert(`Unhandled: ${e.reason && (e.reason.message||e.reason)}`); } catch {} });
+
+      // Health indicator
+      async function loadHealth() {
+        try {
+          const h = await json('/api/health');
+          if (h.ok && h.exists) $('health').textContent = `Repo OK • ${h.repo}`;
+          else $('health').textContent = `Repo not available • ${h.repo || ''}`;
+        } catch (e) { $('health').textContent = 'Health check failed'; }
+      }
+
+      // Gated run summary: compare whitelist vs baseline
+      async function loadGatingSummary() {
+        const div = $('gatingSummary');
+        const tb = $('gatingTbl').querySelector('tbody');
+        tb.innerHTML = '';
+        try {
+          const runs = await json('/api/runs');
+          if (!runs.length) { div.textContent = 'No runs yet.'; return; }
+          const whitelistRun = runs.find(r => r.summary && Array.isArray(r.summary.tod_whitelist));
+          const baselineRun = runs.find(r => !r.summary || !r.summary.tod_whitelist);
+          const rows = [];
+          if (baselineRun) rows.push({ label: 'Baseline', id: baselineRun.id, summary: baselineRun.summary || {} });
+          if (whitelistRun) rows.push({ label: 'Whitelisted', id: whitelistRun.id, summary: whitelistRun.summary || {} });
+          if (!rows.length) { div.textContent = 'No matching runs.'; return; }
+          div.textContent = '';
+          for (const row of rows) {
+            const s = row.summary;
+            const trades = Number.isFinite(s.num_trades) ? s.num_trades : (s.trade_count ?? '—');
+            const pnl = Number.isFinite(s.total_pnl) ? s.total_pnl.toFixed(2) : '—';
+            const hit = Number.isFinite(s.hit_ratio) ? (s.hit_ratio * 100).toFixed(1) + '%' : '—';
+            const whitelist = Array.isArray(s.tod_whitelist) ? s.tod_whitelist.map(b => `${b.start}-${b.end}`).join(', ') : '—';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td title='${row.id}'>${row.label}</td><td class='text-end'>${trades}</td><td class='text-end'>${pnl}</td><td class='text-end'>${hit}</td><td>${whitelist}</td>`;
+            tb.appendChild(tr);
+          }
+          $('gatingUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          div.textContent = 'Runs endpoint unavailable';
+        }
+      }
+
+      // Lambda sweep
+      let sweepChart;
+      async function loadSweep() {
+        try {
+          const sweeps = await json('/api/sweeps');
+          const div = $('sweepContent');
+          if (!sweeps.length) { div.textContent = 'No sweeps found yet.'; return; }
+          const s = sweeps[0];
+          const mf = s.manifest || {};
+          const bucket = (mf.buckets && mf.buckets.all) || Object.values(mf.buckets||{})[0];
+          const win = bucket && bucket.winner || {};
+          div.innerHTML = `Winner λ: <span class="badge text-bg-secondary badge-key">${(win.lambda??'')}</span>`;
+          const p = document.createElement('div');
+          p.className = 'text-muted'; p.textContent = `${s.key} • metrics: ${bucket && bucket.metrics_csv || ''}`;
+          div.appendChild(p);
+          // Load metrics for a quick chart (score vs lambda)
+          try {
+            const met = await json(`/api/sweep/metrics?key=${encodeURIComponent(s.key)}`);
+            const rows = met.metrics || [];
+            if (rows.length) {
+              const labels = rows.map(r => r.lambda);
+              const data = rows.map(r => r.score);
+              const ctx = $('sweepChart').getContext('2d');
+              const opts = { responsive:true, plugins:{ legend:{display:false}, tooltip:{callbacks:{ label:(c)=>` score ${c.parsed.y.toFixed(2)}`}}}, scales:{ x:{ title:{ display:true, text:'lambda'} }, y:{ title:{ display:true, text:'score'} } } };
+              if (!sweepChart) { sweepChart = new Chart(ctx, { type:'line', data:{ labels, datasets:[{ data, borderColor:'#1976d2', fill:false }] }, options: opts }); }
+              else { sweepChart.data.labels = labels; sweepChart.data.datasets[0].data = data; sweepChart.update('none'); }
+            }
+          } catch { /* ignore */ }
+          $('sweepUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          $('sweepContent').textContent = 'Sweep endpoint unavailable';
+        }
+      }
+
+      // Kanban overview
+      async function loadKanban() {
+        try {
+          const tasks = await json('/api/kanban/tasks?board=bocpd');
+          const by = { 'To Do':0, 'In Progress':0, 'Done':0 };
+          for (const t of tasks) { by[t.status] = (by[t.status]||0)+1; }
+          $('kanbanContent').innerHTML = `<div class='d-flex gap-2 flex-wrap status-pills'>
+            <span class='badge text-bg-light'>To Do: ${by['To Do']||0}</span>
+            <span class='badge text-bg-warning'>In Progress: ${by['In Progress']||0}</span>
+            <span class='badge text-bg-success'>Done: ${by['Done']||0}</span>
+          </div>`;
+          $('kanbanUpdated').textContent = new Date().toLocaleTimeString();
+        } catch(e) {
+          $('kanbanContent').textContent = 'Kanban API unavailable';
+        }
+      }
+
+      // WFO summary (latest run)
+      async function loadWfoSummary() {
+        try {
+          const runs = await json('/api/wfo/runs');
+          const div = $('wfoSummary');
+          const tb = $('wfoStepsTbl').querySelector('tbody');
+          tb.innerHTML = '';
+          if (!runs.length) { div.textContent = 'No WFO runs yet.'; return; }
+          const name = runs[0].name;
+          const data = await json(`/api/wfo/metrics?run=${encodeURIComponent(name)}`);
+          const rows = data.metrics || [];
+          if (!rows.length) { div.textContent = `Run: ${name} (no metrics yet)`; return; }
+          const stepRows = rows.filter(r => r.train_start && r.test_start);
+          const agg = rows[rows.length-1];
+          const steps = stepRows.length;
+          const covStart = stepRows.length ? stepRows[0].test_start : '';
+          const covEnd = stepRows.length ? stepRows[stepRows.length-1].test_end : '';
+          const oosSharpe = (agg && Number.isFinite(agg.after_cost_sharpe)) ? Number(agg.after_cost_sharpe).toFixed(3) : '—';
+          div.innerHTML = `Run: <span class='badge text-bg-light badge-key'>${name}</span><br>OOS Sharpe: <b>${oosSharpe}</b> · Steps: <b>${steps}</b> · Coverage: <span class='badge text-bg-light badge-key'>${covStart||''}</span> → <span class='badge text-bg-light badge-key'>${covEnd||''}</span>`;
+          // Fill mini table (last up to 8 steps)
+          const lastSteps = stepRows.slice(-8);
+          let i = steps - lastSteps.length + 1;
+          for (const r of lastSteps) {
+            const tr = document.createElement('tr');
+            const lam = r.param_cp_lambda !== undefined ? r.param_cp_lambda : '';
+            const thr = r.param_cp_thr !== undefined ? r.param_cp_thr : '';
+            const k = r.param_break_k_atr !== undefined ? r.param_break_k_atr : '';
+            const sh = Number.isFinite(r.after_cost_sharpe) ? Number(r.after_cost_sharpe).toFixed(3) : '';
+            tr.innerHTML = `<td>${i++}</td><td>${lam}</td><td>${thr}</td><td>${k}</td><td class='text-end'>${sh}</td>`;
+            tb.appendChild(tr);
+          }
+          $('wfoUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          $('wfoSummary').textContent = 'WFO endpoint unavailable';
+        }
+      }
+
+      // Recent runs (table + mini chart)
+      let runsChart;
+      async function loadRuns() {
+        try {
+          const runs = await json('/api/runs');
+          const div = $('runsContent');
+          if (!runs.length) { div.textContent = 'No runs yet.'; return; }
+          const count = Math.max(1, Math.min(100, parseInt(($('runCount').value||'10'),10)));
+          const filter = ($('runFilter').value||'').trim().toLowerCase();
+          const filtered = runs.filter(r => !filter || String(r.id).toLowerCase().includes(filter));
+          const rows = filtered.slice(0, count);
+
+          const tbl = document.createElement('table');
+          tbl.className = 'table table-sm table-striped align-middle runs-table';
+          tbl.innerHTML = `<thead><tr>
+            <th>Run</th><th class='text-end'>Trades</th><th class='text-end'>PnL</th><th class='text-end'>Hit%</th><th>Whitelist</th><th>Summary</th>
+          </tr></thead>`;
+          const tb = document.createElement('tbody');
+          for (const r of rows) {
+            const s = r.summary || {};
+            const tr = document.createElement('tr');
+            const rep = `/runs/${encodeURIComponent(r.id)}/report.html`;
+            const sum = `/api/runs/${encodeURIComponent(r.id)}/summary`;
+            const trades = Number.isFinite(s.num_trades) ? s.num_trades : (s.trade_count ?? 0);
+            const pnl = Number.isFinite(s.total_pnl) ? s.total_pnl.toFixed(2) : '—';
+            const hit = Number.isFinite(s.hit_ratio) ? (s.hit_ratio * 100).toFixed(1) + '%' : '—';
+            const whitelist = Array.isArray(s.tod_whitelist) ? s.tod_whitelist.map(b => `${b.start}-${b.end}`).join(', ') : '—';
+            tr.innerHTML = `<td title='${r.id}'><a class='cell-run' href='${rep}' target='_blank'>${r.id}</a></td>
+              <td class='text-end'>${trades}</td>
+              <td class='text-end'>${pnl}</td>
+              <td class='text-end'>${hit}</td>
+              <td>${whitelist}</td>
+              <td class='actions text-nowrap'>
+                <a href='${sum}' target='_blank' title='JSON summary'>🧾</a>
+              </td>`;
+            tr.style.cursor = 'pointer';
+            tr.addEventListener('click', () => showRunDetail(r.id));
+            tb.appendChild(tr);
+          }
+          tbl.appendChild(tb); div.innerHTML = ''; div.appendChild(tbl);
+          if (rows[0]) { await showRunDetail(rows[0].id); }
+
+          const topForChart = rows
+            .map(r => ({ name: r.id, score: Number(r.summary?.total_pnl) }))
+            .filter(o => Number.isFinite(o.score))
+            .slice(0, Math.min(10, rows.length));
+          const labels = topForChart.map(o => o.name.split('/').slice(-1)[0]);
+          const data = topForChart.map(o => o.score);
+          const ctx = $('runsChart').getContext('2d');
+          const opts = { responsive: true, scales: { x: { ticks: { display: false } }, y: { beginAtZero: false } }, plugins: { legend: { display:false }, tooltip: { callbacks: { label: (c)=>` ${c.parsed.y.toFixed(2)}` } } } };
+          if (!runsChart) { runsChart = new Chart(ctx, { type: 'bar', data: { labels, datasets: [{ label:'PnL', data, backgroundColor: 'rgba(25, 118, 210, 0.6)' }] }, options: opts }); }
+          else { runsChart.data.labels = labels; runsChart.data.datasets[0].data = data; runsChart.update('none'); }
+          $('runsUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          $('runsContent').textContent = 'Failed to load runs';
+        }
+      }
+
+      async function showRunDetail(runId) {
+        const detail = $('runDetail');
+        if (!runId) { detail.textContent = 'Select a run to view details.'; return; }
+        detail.textContent = `Loading ${runId}…`;
+        try {
+          const [summary, equity, tradesRes, roundTrips] = await Promise.all([
+            json(`/api/runs/${encodeURIComponent(runId)}/summary`),
+            json(`/api/runs/${encodeURIComponent(runId)}/equity`).catch(() => []),
+            json(`/api/runs/${encodeURIComponent(runId)}/trades?limit=10`).catch(() => ({ trades: [] })),
+            json(`/api/runs/${encodeURIComponent(runId)}/roundtrips`).catch(() => []),
+          ]);
+          const trades = tradesRes.trades || tradesRes;
+          const lastEquity = Array.isArray(equity) && equity.length ? equity[equity.length - 1].equity : null;
+          const rows = [];
+          rows.push(`<div><strong>Run:</strong> ${runId}</div>`);
+          rows.push(`<div><strong>Trades:</strong> ${summary.num_trades ?? summary.trade_count ?? 0} · <strong>PnL:</strong> ${Number.isFinite(summary.total_pnl)?summary.total_pnl.toFixed(2):'—'} · <strong>Hit:</strong> ${Number.isFinite(summary.hit_ratio)?(summary.hit_ratio*100).toFixed(1)+'%':'—'}</div>`);
+          rows.push(`<div><strong>Last Equity:</strong> ${Number.isFinite(lastEquity)?Number(lastEquity).toFixed(2):'—'}</div>`);
+          if (Array.isArray(summary.tod_whitelist)) {
+            const wl = summary.tod_whitelist.map(b => `${b.start}-${b.end}`).join(', ');
+            rows.push(`<div><strong>Whitelist:</strong> ${wl}</div>`);
+          }
+          if (trades.length) {
+            const tbl = document.createElement('table');
+            tbl.className = 'table table-sm mb-2';
+            tbl.innerHTML = '<thead><tr><th>Entry</th><th>Exit</th><th>Side</th><th class="text-end">PnL</th></tr></thead>';
+            const tb = document.createElement('tbody');
+            for (const t of trades) {
+              const tr = document.createElement('tr');
+              tr.innerHTML = `<td>${t.entry_time||''}</td><td>${t.exit_time||''}</td><td>${t.side||''}</td><td class='text-end'>${Number.isFinite(Number(t.pnl))?Number(t.pnl).toFixed(2):t.pnl||''}</td>`;
+              tb.appendChild(tr);
+            }
+            tbl.appendChild(tb);
+            rows.push(tbl.outerHTML);
+          }
+          if (Array.isArray(roundTrips) && roundTrips.length) {
+            const first = roundTrips[0];
+            rows.push(`<div class='small text-muted'>Round-trip sample: hold=${first.hold_seconds ?? '—'}s · pnl=${Number.isFinite(first.pnl)?Number(first.pnl).toFixed(2):first.pnl}</div>`);
+          }
+          detail.innerHTML = rows.join('');
+        } catch (e) {
+          detail.textContent = `Failed to load run detail: ${e}`;
+        }
+      }
+
+      // Populate cp sweep dir list (cp_thr, cp_thr_lam40, cp_thr_lam60, ...)
+      async function loadCpSweepKeys() {
+        try {
+          const sel = $('cpKeySelect');
+          const list = await json('/api/cp_sweeps');
+          const prev = sel.value;
+          sel.innerHTML = '';
+          if (!list || !list.length) { sel.innerHTML = '<option value="">(none)</option>'; return; }
+          for (const it of list) {
+            const opt = document.createElement('option');
+            opt.value = it.key; opt.textContent = it.key;
+            sel.appendChild(opt);
+          }
+          // Prefer previously selected, else cp_thr, else first
+          if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+          else if ([...sel.options].some(o => o.value === 'cp_thr')) sel.value = 'cp_thr';
+          else sel.selectedIndex = 0;
+        } catch { /* ignore */ }
+      }
+
+      // cp sweep results summary
+      async function loadSweepBest() {
+        try {
+          const key = ($('cpKeySelect').value || '').trim();
+          const qp = key ? ('?key=' + encodeURIComponent(key)) : '';
+          const js = await json('/api/cp_sweep' + qp);
+          const div = $('sweepBest');
+          if (!js || !js.best) { div.textContent = 'No sweep results yet.'; return; }
+          const b = js.best;
+          const bestLink = b.run_id ? `/runs/${encodeURIComponent(b.run_id)}/report.html` : '#';
+          div.innerHTML = `Best: cp_thr=<span class='badge text-bg-light badge-key'>${b.cp_thr ?? ''}</span> k=<span class='badge text-bg-light badge-key'>${b.break_k_atr ?? ''}</span>
+            net=${(b.net??'').toFixed ? b.net.toFixed(2) : b.net}
+            sharpe=${(b.after_cost_sharpe??'').toFixed ? b.after_cost_sharpe.toFixed(3) : b.after_cost_sharpe}
+            <div class='mt-1'><a href='${bestLink}' target='_blank'>Open best run</a></div>
+            <div class='text-muted mt-1'>${js.key ? (js.key + ' • ') : ''}${js.path||''}</div>`;
+          // List a few rows if available
+          try {
+            const rows = (js.rows||[]).slice(0,6);
+            if (rows.length) {
+              const tbl = document.createElement('table'); tbl.className='table table-sm mb-0';
+              tbl.innerHTML = '<thead><tr><th>cp_thr</th><th>k</th><th class="text-end">net</th><th class="text-end">sharpe</th><th>run</th></tr></thead>';
+              const tb = document.createElement('tbody');
+              for (const r of rows) {
+                const link = r.run_id ? `/runs/${encodeURIComponent(r.run_id)}/report.html` : '#';
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${r.cp_thr ?? ''}</td><td>${r.break_k_atr ?? ''}</td><td class='text-end'>${fmtNum(Number(r.net),2)}</td><td class='text-end'>${fmtNum(Number(r.after_cost_sharpe),3)}</td><td class='text-truncate' style='max-width:160px'><a href='${link}' target='_blank'>${r.run_id||''}</a></td>`;
+                tb.appendChild(tr);
+              }
+              tbl.appendChild(tb); div.appendChild(tbl);
+            }
+          } catch { /* ignore */ }
+          $('cpUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          $('sweepBest').textContent = 'Sweep endpoint unavailable';
+        }
+      }
+
+      // Dataset validation
+      async function loadDsValidation() {
+        try {
+          const js = await json('/api/dataset/validation');
+          const div = $('dsVal');
+          if (!js || js.files === undefined) { div.textContent='No validation file.'; return; }
+          const ok = js.ok ? '✅ OK' : '❌ Issues';
+          div.innerHTML = `${ok} • files=${js.files}`;
+        } catch(e) {
+          $('dsVal').textContent = 'Validation endpoint unavailable';
+        }
+      }
+
+      async function loadSweepLeaders() {
+        const div = $('leadersContent');
+        const tb = $('leadersTbl').querySelector('tbody');
+        tb.innerHTML = '';
+        try {
+          const js = await json('/api/candidates/best');
+          const rows = (js.best||[]).filter(r => r && r.params);
+          if (!rows.length) { div.textContent = 'No candidates exported yet.'; return; }
+          div.textContent = '';
+          for (const r of rows) {
+            const lam = r.params.cp_lambda ?? '';
+            const thr = r.params.cp_thr ?? '';
+            const k = r.params.break_k_atr ?? '';
+            const tc = (r.metrics && r.metrics.trade_count != null) ? r.metrics.trade_count : '';
+            const net = (r.metrics && r.metrics.net != null) ? r.metrics.net : '';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${lam}</td><td>${thr}</td><td>${k}</td><td class='text-end'>${tc}</td><td class='text-end'>${(Number(net)||0).toFixed(2)}</td>`;
+            tb.appendChild(tr);
+          }
+          $('leadersUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          div.textContent = 'Leaders endpoint unavailable';
+        }
+      }
+
+      async function loadProduction() {
+        const div = $('prodContent');
+        const tb = $('prodTbl').querySelector('tbody');
+        tb.innerHTML = '';
+        try {
+          const js = await json('/api/promotion/status');
+          if (!js.exists) { div.textContent = 'No production config yet.'; return; }
+          const p = js.params || {};
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${p.cp_lambda ?? ''}</td><td>${p.cp_thr ?? ''}</td><td>${p.break_k_atr ?? ''}</td><td>${p.trail_t_atr ?? ''}</td><td>${p.max_hold_s ?? ''}</td>`;
+          tb.appendChild(tr);
+          const last = js.last;
+          div.innerHTML = `bocpd_production.yaml ${js.path ? '· ' + js.path : ''}` + (last && last.promoted_at ? `<br><span class='text-muted small'>last promoted: ${last.promoted_at}</span>` : '');
+          $('prodUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          div.textContent = 'Promotion status unavailable';
+        }
+      }
+
+      let detectChart = null;
+      let delayChart = null;
+      async function loadDetectionMetrics() {
+        const div = $('detectContent');
+        try {
+          const js = await json('/api/quality/detection');
+          if (!js || !js.ok || !js.metrics) { div.textContent='No detection metrics yet.'; return; }
+          const m = js.metrics || {}; div.textContent = `thr=${m.thr} · changes=${m.n_changes} · detected=${m.detected} · missed=${m.missed} · median_delay=${m.median_delay_bars} · false_alarms=${m.false_alarms}`;
+          $('detectUpdated').textContent = new Date().toLocaleTimeString();
+          // Chart: detected/missed/false_alarms
+          const ctx = $('detectChart').getContext('2d');
+          const labels = ['Detected','Missed','False Alarms'];
+          const data = [Number(m.detected||0), Number(m.missed||0), Number(m.false_alarms||0)];
+          const opts = { responsive:true, plugins:{ legend:{display:false} }, scales:{ y:{ beginAtZero:true } } };
+          if (!detectChart) detectChart = new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ data, backgroundColor:['#22c55e','#ef4444','#f59e0b'] }] }, options: opts });
+          else { detectChart.data.labels = labels; detectChart.data.datasets[0].data = data; detectChart.update('none'); }
+          // Optional: delay histogram if data present
+          const dh = m.delay_hist || m.delay_histogram || null;
+          const bins = Array.isArray(m.delay_bins) ? m.delay_bins : (dh && Array.isArray(dh) ? dh.map(x=> x.bin ?? x.bucket ?? '') : null);
+          const counts = Array.isArray(m.delay_counts) ? m.delay_counts : (dh && Array.isArray(dh) ? dh.map(x=> Number(x.count || x.n || 0)) : null);
+          const info = $('delayInfo');
+          if (bins && counts && bins.length === counts.length && bins.length > 0) {
+            info.textContent = '';
+            const dctx = $('delayChart').getContext('2d');
+            const dopts = { responsive:true, plugins:{ legend:{display:false} }, scales:{ y:{ beginAtZero:true, title:{ display:true, text:'Count' } }, x:{ title:{ display:true, text:'Delay (bars)' } } } };
+            if (!delayChart) delayChart = new Chart(dctx, { type:'bar', data:{ labels: bins, datasets:[{ data: counts, backgroundColor:'#60a5fa' }] }, options: dopts });
+            else { delayChart.data.labels = bins; delayChart.data.datasets[0].data = counts; delayChart.update('none'); }
+          } else {
+            info.textContent = 'No delay histogram available.';
+          }
+        } catch (e) {
+          div.textContent = 'Detection endpoint unavailable';
+        }
+      }
+
+      let ttncChart = null;
+      async function loadTTNCToD() {
+        const div = $('ttncContent');
+        try {
+          const js = await json('/api/quality/ttnc_tod');
+          const buckets = (js && js.buckets) || [];
+          if (!buckets.length) { div.textContent = 'No TTNC ToD stats yet.'; return; }
+          div.textContent = '';
+          const labels = buckets.map(b => b.bucket);
+          const med = buckets.map(b => Number(b.median_s||0));
+          const p90 = buckets.map(b => Number(b.p90_s!=null?b.p90_s:(b.p95_s!=null?b.p95_s:null)));
+          const p10 = buckets.map(b => Number(b.p10_s!=null?b.p10_s:(b.p05_s!=null?b.p05_s:null)));
+          const rate = buckets.map(b => Number((b.event_rate||0)*100));
+          const hasBands = p90.some(Number.isFinite) && p10.some(Number.isFinite);
+          const ctx = $('ttncChart').getContext('2d');
+          const datasets = [];
+          if (hasBands) {
+            datasets.push({ label:'p90', data: p90, borderColor:'rgba(14,165,233,0.2)', backgroundColor:'rgba(14,165,233,0.08)', fill:'+1', pointRadius:0, tension:0 });
+            datasets.push({ label:'Median', data: med, borderColor:'#0ea5e9', backgroundColor:'transparent', fill:false, tension:0 });
+            datasets.push({ label:'p10', data: p10, borderColor:'rgba(14,165,233,0.2)', backgroundColor:'rgba(14,165,233,0.08)', fill:false, pointRadius:0, tension:0 });
+          } else {
+            datasets.push({ label:'Median', data: med, borderColor:'#0ea5e9', backgroundColor:'transparent', fill:false, tension:0 });
+          }
+          datasets.push({ label:'Event rate %', data: rate, borderColor:'#f59e0b', yAxisID:'y1', fill:false, tension:0, pointRadius:0 });
+          const opts = { responsive:true, plugins:{ legend:{display:true} }, scales:{ y:{ title:{display:true, text:'Median TTNC (s)'} }, y1:{ position:'right', grid:{ drawOnChartArea:false }, title:{ display:true, text:'Event rate (%)' } } } };
+          if (!ttncChart) ttncChart = new Chart(ctx, { type:'line', data:{ labels, datasets }, options: opts });
+          else { ttncChart.data.labels = labels; ttncChart.data.datasets = datasets; ttncChart.update('none'); }
+        } catch (e) {
+          div.textContent = 'TTNC ToD endpoint unavailable';
+        }
+      }
+
+      // Ablation: confirmation vs baseline vs cooldown
+      let ablationChart = null;
+      async function loadAblation() {
+        const div = $('ablationContent');
+        try {
+          const js = await json('/api/ablation/confirm');
+          const rows = js.rows || [];
+          if (!rows.length) { div.textContent = 'No ablation results yet.'; return; }
+          div.textContent = '';
+          // Try to find variant column and a primary metric
+          const variantKey = Object.keys(rows[0]).find(k => /variant|name|mode/i.test(k)) || 'variant';
+          const metricKey = ['after_cost_sharpe','sharpe','net','score'].find(k => rows[0].hasOwnProperty(k)) || Object.keys(rows[0]).find(k => typeof rows[0][k] === 'number');
+          const labels = rows.map(r => String(r[variantKey]||''));
+          const data = rows.map(r => Number(r[metricKey]||0));
+          const ctx = $('ablationChart').getContext('2d');
+          const opts = { responsive:true, plugins:{ legend:{display:false}, tooltip:{callbacks:{ label:(c)=>` ${metricKey} ${c.parsed.y.toFixed(3)}`}} }, scales:{ y:{ beginAtZero:false, title:{ display:true, text: metricKey } } } };
+          if (!ablationChart) ablationChart = new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ data, backgroundColor:'#10b981' }] }, options: opts });
+          else { ablationChart.data.labels = labels; ablationChart.data.datasets[0].data = data; ablationChart.options.scales.y.title.text = metricKey; ablationChart.update('none'); }
+          $('ablationUpdated').textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+          div.textContent = 'Ablation endpoint unavailable';
+        }
+      }
+
+      // Logs
+      async function loadLogs() {
+        try {
+          const div = $('logsList');
+          const list = await json('/api/logs');
+          if (!list.files || !list.files.length) { div.textContent='No logs yet.'; return; }
+          div.className=''; div.innerHTML='';
+          for (const f of list.files.slice(-6)) {
+            const a = document.createElement('a'); a.href='#'; a.textContent=f; a.style.display='block';
+            a.onclick = async (e) => { e.preventDefault(); const t = await fetch('/api/logs?file=' + encodeURIComponent(f)).then(r=>r.text()); $('logPreview').textContent = t; };
+            div.appendChild(a);
+          }
+        } catch (e) {
+          $('logsList').textContent = 'Failed to load logs';
+        }
+      }
+
+      // Refresh orchestration
+      let timer = null;
+      function refreshAll() { loadHealth(); loadSweep(); loadKanban(); loadRuns(); loadCpSweepKeys().then(loadSweepBest); loadWfoSummary(); loadGatingSummary(); loadSweepLeaders(); loadProduction(); loadDetectionMetrics(); loadTTNCToD(); loadAblation(); loadDsValidation(); loadLogs(); }
+      function setupAutoRefresh() {
+        if (timer) { clearInterval(timer); timer = null; }
+        const on = $('autoRefresh').checked;
+        const s = Math.max(2, parseInt($('refreshInterval').value || '10', 10));
+        if (on) timer = setInterval(refreshAll, s*1000);
+      }
+      $('refreshBtn').addEventListener('click', refreshAll);
+      $('autoRefresh').addEventListener('change', setupAutoRefresh);
+      $('refreshInterval').addEventListener('change', setupAutoRefresh);
+      $('runFilter').addEventListener('input', loadRuns);
+      $('runCount').addEventListener('change', loadRuns);
+
+      // Initial load
+      loadCpSweepKeys().then(loadSweepBest);
+      refreshAll();
+      $('cpKeySelect').addEventListener('change', loadSweepBest);
+      setupAutoRefresh();
+    </script>
+  </body>
+  </html>
