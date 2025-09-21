@@ -29,6 +29,7 @@
       .pipeline-job--never { border-style:dashed; }
       .pipeline-job--unknown { border-color:#d3d7dd; }
       .pipeline-job--planned { border-style:dashed; opacity:0.85; }
+      .pipeline-coming-soon { font-style:italic; }
       .pipeline-job-header { display:flex; justify-content:space-between; align-items:flex-start; gap:0.5rem; }
       .pipeline-job-header .badge { white-space:nowrap; }
       .pipeline-job h3 { font-size:1rem; margin:0; }
@@ -43,10 +44,6 @@
       .approach-header h3 { margin:0; font-size:1.1rem; }
       .approach-meta { font-size:0.82rem; color:#6c757d; }
       .approach-description { font-size:0.85rem; color:#6c757d; margin-bottom:0.75rem; }
-      .sequence-summary { border:1px solid #ced4da; border-radius:0.6rem; background:#f8f9ff; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; }
-      .sequence-summary h4 { font-size:0.95rem; margin:0 0 0.5rem 0; }
-      .sequence-summary table { width:100%; font-size:0.82rem; }
-      .sequence-summary td { padding:0.25rem 0.5rem; }
       @media (max-width: 576px) {
         .pipeline-metrics { grid-template-columns:1fr; }
       }
@@ -183,9 +180,6 @@
       let formInitialised = false;
       let approachMeta = [];
       let approachSections = [];
-      let sequenceModelInfo = null;
-      let boostingModelInfo = null;
-      let hmmInfo = null;
 
       const statusClasses = {
         success: { badge: 'bg-success', dot: 'status-success', label: 'Success' },
@@ -387,252 +381,6 @@
 
       function updateApproachSections() {
         approachSections = computeApproachSections(buildDefinitions, approachMeta);
-      }
-
-      async function fetchSequenceModelInfo() {
-        try {
-          const res = await fetch('/api/models/sequence', { cache: 'no-store' });
-          if (!res.ok) throw new Error('sequence model info unavailable');
-          sequenceModelInfo = await res.json();
-        } catch (err) {
-          console.warn('sequence model info fetch failed:', err);
-          sequenceModelInfo = null;
-        }
-      }
-
-      async function fetchBoostingModelInfo() {
-        try {
-          const res = await fetch('/api/models/boosting', { cache: 'no-store' });
-          if (!res.ok) throw new Error('boosting model info unavailable');
-          boostingModelInfo = await res.json();
-        } catch (err) {
-          console.warn('boosting model info fetch failed:', err);
-          boostingModelInfo = null;
-        }
-      }
-
-      async function fetchHmmInfo() {
-        try {
-          const res = await fetch('/api/labels/hmm', { cache: 'no-store' });
-          if (!res.ok) throw new Error('hmm info unavailable');
-          hmmInfo = await res.json();
-        } catch (err) {
-          console.warn('hmm info fetch failed:', err);
-          hmmInfo = null;
-        }
-      }
-
-      function buildSequenceSummaryNode() {
-        const info = sequenceModelInfo;
-        if (!info || info.ok === false) return null;
-        const container = document.createElement('div');
-        container.className = 'sequence-summary';
-
-        const title = document.createElement('h4');
-        title.textContent = 'Sequence Model Snapshot';
-        container.appendChild(title);
-
-        const updatedAt = info.model_updated_at || info?.evaluation?.generated_at || null;
-        if (updatedAt) {
-          const metaLine = document.createElement('div');
-          metaLine.className = 'text-muted mb-2';
-          metaLine.textContent = `Updated ${fmtDate(updatedAt)} (${fmtRelative(updatedAt)})`;
-          container.appendChild(metaLine);
-        }
-
-        const stats = info.evaluation?.stats || {};
-        if (stats.total_samples) {
-          const statsLine = document.createElement('div');
-          statsLine.className = 'mb-2';
-          statsLine.textContent = `Evaluated ${stats.evaluated_samples || stats.total_samples} / ${stats.total_samples} samples · positives ${stats.positives} · negatives ${stats.negatives}`;
-          container.appendChild(statsLine);
-        }
-
-        const featureList = (info.evaluation && Array.isArray(info.evaluation.features) && info.evaluation.features.length)
-          ? info.evaluation.features
-          : (info.training && Array.isArray(info.training.features) ? info.training.features : null);
-        if (featureList && featureList.length) {
-          const featsLine = document.createElement('div');
-          featsLine.className = 'text-muted mb-2';
-          featsLine.textContent = `Features: ${featureList.join(', ')}`;
-          container.appendChild(featsLine);
-        }
-
-        const metrics = info.evaluation?.metrics || {};
-        const seqMetrics = metrics.sequence_model || null;
-        const baselineMetrics = metrics.logistic_baseline || null;
-        if (seqMetrics) {
-          const table = document.createElement('table');
-          table.className = 'table table-sm mb-0';
-          table.innerHTML = `
-            <thead>
-              <tr><th></th><th>Sequence</th><th>Baseline</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>ROC AUC</td><td>${fmtFloat(seqMetrics.roc_auc)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.roc_auc) : '—'}</td></tr>
-              <tr><td>PR AUC</td><td>${fmtFloat(seqMetrics.pr_auc)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.pr_auc) : '—'}</td></tr>
-              <tr><td>F1@${fmtFloat(seqMetrics.threshold, 2)}</td><td>${fmtFloat(seqMetrics.f1)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.f1) : '—'}</td></tr>
-              <tr><td>Precision</td><td>${fmtPercent(seqMetrics.precision)}</td><td>${baselineMetrics ? fmtPercent(baselineMetrics.precision) : '—'}</td></tr>
-              <tr><td>Recall</td><td>${fmtPercent(seqMetrics.recall)}</td><td>${baselineMetrics ? fmtPercent(baselineMetrics.recall) : '—'}</td></tr>
-              <tr><td>Brier</td><td>${fmtFloat(seqMetrics.brier)}</td><td>${baselineMetrics ? fmtFloat(baselineMetrics.brier) : '—'}</td></tr>
-            </tbody>
-          `;
-          container.appendChild(table);
-        } else {
-          const placeholder = document.createElement('div');
-          placeholder.className = 'text-muted';
-          placeholder.textContent = 'Run "Sequence Model Evaluation" to populate metrics.';
-          container.appendChild(placeholder);
-        }
-
-        const latency = info.latency;
-        if (latency && typeof latency === 'object') {
-          const latencyLine = document.createElement('div');
-          latencyLine.className = 'mt-2';
-          latencyLine.textContent = `Latency — sequence ${fmtFloat(latency.sequence_mean_ms, 2)} ms vs baseline ${fmtFloat(latency.baseline_mean_ms, 2)} ms`;
-          container.appendChild(latencyLine);
-        }
-
-        const top = Array.isArray(info.evaluation?.top_predictions) ? info.evaluation.top_predictions.slice(0, 5) : [];
-        if (top.length) {
-          const header = document.createElement('div');
-          header.className = 'mt-2';
-          header.textContent = 'Top alerts:';
-          container.appendChild(header);
-          const list = document.createElement('ol');
-          top.forEach((item) => {
-            const li = document.createElement('li');
-            const ts = item.timestamp ? `${fmtDate(item.timestamp)} (${fmtRelative(item.timestamp)})` : '—';
-            const prob = fmtPercent(item.probability, 1);
-            const lead = item.lead_time === null || item.lead_time === undefined || Number.isNaN(item.lead_time)
-              ? 'n/a'
-              : `${fmtFloat(item.lead_time, 1)}s`;
-            li.textContent = `${ts} → ${prob} · ${item.label === 1 ? 'event ahead' : 'no event'} · lead ${lead}`;
-            list.appendChild(li);
-          });
-          container.appendChild(list);
-        }
-
-        return container;
-      }
-
-      function buildBoostingSummaryNode() {
-        const info = boostingModelInfo;
-        if (!info || info.ok === false) return null;
-        const container = document.createElement('div');
-        container.className = 'sequence-summary';
-
-        const title = document.createElement('h4');
-        title.textContent = 'Boosting Model Snapshot';
-        container.appendChild(title);
-
-        const updatedAt = info.model_updated_at || info?.evaluation?.generated_at || null;
-        if (updatedAt) {
-          const metaLine = document.createElement('div');
-          metaLine.className = 'text-muted mb-2';
-          metaLine.textContent = `Updated ${fmtDate(updatedAt)} (${fmtRelative(updatedAt)})`;
-          container.appendChild(metaLine);
-        }
-
-        const metrics = info.evaluation?.metrics || info.training?.metrics || {};
-        const boosting = metrics.boosting || metrics.boost || null;
-        const logistic = metrics.logistic || null;
-        if (boosting) {
-          const table = document.createElement('table');
-          table.className = 'table table-sm mb-0';
-          table.innerHTML = `
-            <thead>
-              <tr><th></th><th>Boosting</th><th>Logistic</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>ROC AUC</td><td>${fmtFloat(boosting.roc_auc)}</td><td>${logistic ? fmtFloat(logistic.roc_auc) : '—'}</td></tr>
-              <tr><td>PR AUC</td><td>${fmtFloat(boosting.pr_auc)}</td><td>${logistic ? fmtFloat(logistic.pr_auc) : '—'}</td></tr>
-              <tr><td>F1@${fmtFloat(boosting.threshold, 2)}</td><td>${fmtFloat(boosting.f1)}</td><td>${logistic ? fmtFloat(logistic.f1) : '—'}</td></tr>
-              <tr><td>Precision</td><td>${fmtPercent(boosting.precision)}</td><td>${logistic ? fmtPercent(logistic.precision) : '—'}</td></tr>
-              <tr><td>Recall</td><td>${fmtPercent(boosting.recall)}</td><td>${logistic ? fmtPercent(logistic.recall) : '—'}</td></tr>
-              <tr><td>Brier</td><td>${fmtFloat(boosting.brier)}</td><td>${logistic ? fmtFloat(logistic.brier) : '—'}</td></tr>
-            </tbody>
-          `;
-          container.appendChild(table);
-        } else {
-          const placeholder = document.createElement('div');
-          placeholder.className = 'text-muted';
-          placeholder.textContent = 'Run boosting evaluation to populate metrics.';
-          container.appendChild(placeholder);
-        }
-
-        const top = Array.isArray(info.training?.top_predictions) ? info.training.top_predictions.slice(0, 5)
-          : (Array.isArray(info.evaluation?.top_predictions) ? info.evaluation.top_predictions.slice(0, 5) : []);
-        if (top.length) {
-          const header = document.createElement('div');
-          header.className = 'mt-2';
-          header.textContent = 'Top alerts:';
-          container.appendChild(header);
-          const list = document.createElement('ol');
-          top.forEach((item) => {
-            const li = document.createElement('li');
-            const ts = item.timestamp ? `${fmtDate(item.timestamp)} (${fmtRelative(item.timestamp)})` : '—';
-            const prob = fmtPercent(item.probability, 1);
-            const lead = item.lead_time === null || item.lead_time === undefined || Number.isNaN(item.lead_time)
-              ? 'n/a'
-              : `${fmtFloat(item.lead_time, 1)}s`;
-            li.textContent = `${ts} → ${prob} · ${item.label === 1 ? 'event ahead' : 'no event'} · lead ${lead}`;
-            list.appendChild(li);
-          });
-          container.appendChild(list);
-        }
-
-        return container;
-      }
-
-      function buildHmmSummaryNode() {
-        const info = hmmInfo;
-        if (!info || info.ok === false) return null;
-        const metrics = info.metrics || {};
-        const container = document.createElement('div');
-        container.className = 'sequence-summary';
-
-        const title = document.createElement('h4');
-        title.textContent = 'HMM Label Snapshot';
-        container.appendChild(title);
-
-        const updatedAt = info.summary?.generated_at || metrics.generated_at || null;
-        if (updatedAt) {
-          const metaLine = document.createElement('div');
-          metaLine.className = 'text-muted mb-2';
-          metaLine.textContent = `Updated ${fmtDate(updatedAt)} (${fmtRelative(updatedAt)})`;
-          container.appendChild(metaLine);
-        }
-
-        const counts = metrics.state_counts || {};
-        if (Object.keys(counts).length) {
-          const table = document.createElement('table');
-          table.className = 'table table-sm mb-0';
-          const rows = Object.keys(counts).map((state) => `<tr><td>State ${state}</td><td>${counts[state]}</td></tr>`).join('');
-          table.innerHTML = `<tbody>${rows}</tbody>`;
-          container.appendChild(table);
-        }
-
-        if (metrics.avg_change_duration_s) {
-          const durationLine = document.createElement('div');
-          durationLine.textContent = `Avg change duration: ${fmtFloat(metrics.avg_change_duration_s, 2)}s`;
-          container.appendChild(durationLine);
-        }
-
-        if (metrics.last_change) {
-          const lastChange = document.createElement('div');
-          lastChange.className = 'text-muted';
-          lastChange.textContent = `Last change: ${fmtDate(metrics.last_change)} (${fmtRelative(metrics.last_change)})`;
-          container.appendChild(lastChange);
-        }
-
-        if (metrics.num_change_points !== undefined) {
-          const numCp = document.createElement('div');
-          numCp.textContent = `Change points: ${metrics.num_change_points}`;
-          container.appendChild(numCp);
-        }
-
-        return container;
       }
 
       function ensureForm(defs) {
@@ -1008,17 +756,6 @@
             card.appendChild(desc);
           }
 
-          if (approach.id === 'sequence') {
-            const summaryNode = buildSequenceSummaryNode();
-            if (summaryNode) card.appendChild(summaryNode);
-          } else if (approach.id === 'boosting') {
-            const summaryNode = buildBoostingSummaryNode();
-            if (summaryNode) card.appendChild(summaryNode);
-          } else if (approach.id === 'hmm') {
-            const summaryNode = buildHmmSummaryNode();
-            if (summaryNode) card.appendChild(summaryNode);
-          }
-
           const grid = document.createElement('div');
           grid.className = 'row g-3';
 
@@ -1057,6 +794,11 @@
               const startDisabled = def.enabled === false;
               const startLabel = startDisabled ? 'Coming Soon' : 'Start';
               const startAttrs = startDisabled ? 'disabled' : `data-job-id="${escapeHtml(def.id)}"`;
+              const missingScripts = Array.isArray(def.missing_scripts) ? def.missing_scripts.filter(Boolean) : [];
+              const disabledReason = def.disabled_reason || (missingScripts.length ? `Missing scripts: ${missingScripts.join(', ')}` : '');
+              const disabledNote = startDisabled
+                ? `<div class="pipeline-coming-soon text-muted small mt-2">Coming soon${disabledReason ? ` — ${escapeHtml(disabledReason)}` : ''}</div>`
+                : '';
               const jobDiv = document.createElement('div');
               jobDiv.className = `pipeline-job pipeline-job--${statusKey}`;
               jobDiv.innerHTML = `
@@ -1079,6 +821,7 @@
                     ${statusKey === 'running' && latest?.logfile && !startDisabled ? `<button type="button" class="btn btn-outline-danger btn-sm pipeline-kill-btn" data-logfile="${escapeHtml(latest.logfile)}">Kill</button>` : ''}
                   </div>
                 </div>
+                ${disabledNote}
                 ${paramsText ? `<div class="text-muted mt-2 small">Active params: ${escapeHtml(paramsText)}</div>` : ''}
                 ${detailHtml}
               `;
@@ -1256,11 +999,6 @@
           if (Array.isArray(data.definitions)) {
             ensureForm(data.definitions);
           }
-          await Promise.all([
-            fetchSequenceModelInfo(),
-            fetchBoostingModelInfo(),
-            fetchHmmInfo(),
-          ]);
           approachMeta = Array.isArray(data.approaches) ? data.approaches : [];
           updateApproachSections();
           const builds = data.builds || [];

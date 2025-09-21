@@ -15,9 +15,8 @@ const EXPERIMENTS_DIR = process.env.ALPHA_EXPERIMENTS_DIR || '/home/jason/ml/alp
 const REPO = process.env.TEST_BOCPD_DIR || EXPERIMENTS_DIR;
 const KANBAN = process.env.KANBAN_BASE || 'http://localhost:4000';
 const BUILD_PY = process.env.BUILD_PY || '/home/jason/venvs/torchbuild/bin/python';
-const SEQUENCE_MODEL_DIR = process.env.SEQUENCE_MODEL_DIR || 'artifacts/models/sequence_cnn';
-const BOOSTING_MODEL_DIR = process.env.BOOSTING_MODEL_DIR || 'artifacts/models/boosting';
-const HMM_LABEL_DIR = process.env.HMM_LABEL_DIR || 'artifacts/labels/hmm';
+const TRACK_B_REPO = process.env.TRACK_B_REPO || '/home/jason/ml/bocpdms-track';
+const TRACK_B_PIPELINE_SCRIPT = process.env.TRACK_B_PIPELINE || path.join(TRACK_B_REPO, 'scripts', 'track_b_pipeline.py');
 
 const activeBuilds = new Map();
 
@@ -53,37 +52,329 @@ function makeEnv(overrides = {}) {
   return env;
 }
 
+function resolveScriptPath(script) {
+  if (!script) return null;
+  if (path.isAbsolute(script)) return script;
+  return path.join(REPO, script);
+}
+
+function resolveMissingScripts(definition) {
+  if (!definition) return [];
+  const scripts = Array.isArray(definition.requiredScripts) ? definition.requiredScripts : [];
+  const missing = [];
+  for (const script of scripts) {
+    const resolved = resolveScriptPath(script);
+    if (!resolved || !fs.existsSync(resolved)) {
+      missing.push(script);
+    }
+  }
+  return missing;
+}
+
+function definitionAvailability(definition) {
+  const baseEnabled = definition?.enabled !== false;
+  const missingScripts = resolveMissingScripts(definition);
+  if (missingScripts.length > 0) {
+    const plural = missingScripts.length > 1 ? 'scripts' : 'script';
+    return {
+      enabled: false,
+      missingScripts,
+      reason: `Missing ${plural}: ${missingScripts.join(', ')}`
+    };
+  }
+  const reason = baseEnabled ? null : definition?.disabled_reason || null;
+  return { enabled: baseEnabled, missingScripts, reason };
+}
+
+const PIPELINE_RUN_MARKER = path.join(REPO, 'runs', 'pipeline_demo', 'latest_run.txt');
+
+const TRACK_B_PIPELINE_STEPS = [
+  'synth-data',
+  'discovery',
+  'training-set',
+  'lambda-sweep',
+  'tune-breakout',
+  'run-strategy-demo',
+  'bundle-release',
+];
+
+function loadLatestPipelineRun() {
+  try {
+    const raw = fs.readFileSync(PIPELINE_RUN_MARKER, 'utf8').trim();
+    if (!raw) return null;
+    const candidate = path.isAbsolute(raw) ? raw : path.join(REPO, 'runs', raw);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return null;
+}
+
+function resolveTrackBBundleRun(input) {
+  const candidate = (input || '').trim();
+  if (!candidate || candidate.toLowerCase() === 'latest') {
+    const latest = loadLatestPipelineRun();
+    if (!latest) {
+      throw new Error('No pipeline demo run recorded yet. Run the demo strategy first.');
+    }
+    return latest;
+  }
+  const resolved = path.isAbsolute(candidate) ? candidate : path.join(REPO, candidate);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Run directory not found: ${candidate}`);
+  }
+  return resolved;
+}
+
+function normaliseTrackBStep(step) {
+  if (!step) return null;
+  const key = String(step).trim();
+  if (!key) return null;
+  return TRACK_B_PIPELINE_STEPS.includes(key) ? key : null;
+}
+
+function experimentsPythonPath() {
+  const experimentsSrc = path.join(REPO, 'src');
+  const base = process.env.PYTHONPATH || '/home/jason/ml/sparrow/src';
+  const parts = base ? base.split(path.delimiter) : [];
+  if (parts.includes(experimentsSrc)) return base;
+  return parts.length ? `${experimentsSrc}${path.delimiter}${base}` : experimentsSrc;
+}
+
 const APPROACHES = {
+  track_b: {
+    id: 'track_b',
+    label: 'BOCPDMS Track',
+    description:
+      'BOCPDMS workflow: synthetic data, hazard sweeps, breakout tuning, demo strategy, and packaging.',
+  },
   bocpd: {
     id: 'bocpd',
     label: 'BOCPD Pipeline',
     description:
       'Bayesian online change-point detection workflow spanning discovery, tuning, validation, and promotion.',
   },
-  boosting: {
-    id: 'boosting',
-    label: 'Boosting & Trees',
-    description: 'Gradient-boosted baselines and ensemble comparators for change-point gating.',
-  },
-  sequence: {
-    id: 'sequence',
-    label: 'Sequence Models',
-    description: 'Temporal CNN/RNN approaches operating on causal feature windows.',
-  },
-  hmm: {
-    id: 'hmm',
-    label: 'HMM / Regime Switching',
-    description: 'Hidden Markov and probabilistic regime-switching pipelines.',
-  },
 };
 
 const BUILD_DEFINITIONS = {
+  make_synth_data: {
+    id: 'make_synth_data',
+    label: 'Generate Synthetic MES Bars',
+    description: 'Populate data/cache/mes/bars_1s with deterministic 1s bars for demo runs.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: ['scripts/make_synth_data.py'],
+    details: [
+      'Writes two days of MES bars under data/cache/mes/bars_1s/date=*.',
+      'Feeds downstream lambda sweep, breakout tuning, and pipeline demos.',
+    ],
+    fields: [],
+    buildCommand() {
+      return {
+        cmd: [BUILD_PY, 'scripts/make_synth_data.py'],
+        cwd: REPO,
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: {},
+      };
+    },
+  },
+  lambda_sweep: {
+    id: 'lambda_sweep',
+    label: 'Run Lambda Sweep',
+    description: 'Score hazard lambdas by time-of-day bucket and emit manifest.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: ['scripts/lambda_sweep.py', 'configs/lambda_sweep.yaml'],
+    details: [
+      'Evaluates cp_lambda schedules over cached MES bars.',
+      'Writes artifacts/wfo/lambda_sweep/mes_1s/manifest.json for reuse.',
+    ],
+    fields: [
+      { name: 'config', label: 'Config', type: 'text', default: 'configs/lambda_sweep.yaml' },
+    ],
+    buildCommand(params = {}) {
+      const config = params.config || 'configs/lambda_sweep.yaml';
+      return {
+        cmd: [BUILD_PY, 'scripts/lambda_sweep.py', '--config', config],
+        cwd: REPO,
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { config },
+      };
+    },
+  },
+  tune_bocpd_breakout: {
+    id: 'tune_bocpd_breakout',
+    label: 'Tune BOCPD Breakout',
+    description: 'Grid cp_lambda / threshold candidates over discovery signals.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: ['scripts/tune_bocpd_breakout.py', 'configs/run_mes_bocpd_breakout.yaml'],
+    details: [
+      'Ranks breakout candidates and writes leaderboard CSV.',
+      'Emits top_k_recheck.jsonl for downstream validation.',
+    ],
+    fields: [
+      { name: 'config', label: 'Config', type: 'text', default: 'configs/run_mes_bocpd_breakout.yaml' },
+      { name: 'profile', label: 'Profile', type: 'text', default: '' },
+    ],
+    buildCommand(params = {}) {
+      const config = params.config || 'configs/run_mes_bocpd_breakout.yaml';
+      const profile = params.profile ? String(params.profile).trim() : '';
+      const cmd = [BUILD_PY, 'scripts/tune_bocpd_breakout.py', '--config', config];
+      if (profile) cmd.push('--profile', profile);
+      return {
+        cmd,
+        cwd: REPO,
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { config, profile: profile || undefined },
+      };
+    },
+  },
+  run_strategy_demo: {
+    id: 'run_strategy_demo',
+    label: 'Run Demo Strategy',
+    description: 'Execute demo BOCPD breakout run and record latest marker.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: ['src/intraday_futures/runners/run_strategy.py', 'configs/run_demo.yaml'],
+    details: [
+      'Runs intraday_futures.runners.run_strategy with demo config.',
+      'Updates runs/pipeline_demo/latest_run.txt for bundling.',
+    ],
+    fields: [
+      { name: 'config', label: 'Config', type: 'text', default: 'configs/run_demo.yaml' },
+    ],
+    buildCommand(params = {}) {
+      const config = params.config || 'configs/run_demo.yaml';
+      return {
+        cmd: [BUILD_PY, '-m', 'intraday_futures.runners.run_strategy', '--config', config],
+        cwd: REPO,
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { config },
+      };
+    },
+  },
+  bundle_release: {
+    id: 'bundle_release',
+    label: 'Bundle Latest BOCPDMS Run',
+    description: 'Package the most recent demo run into a release tarball.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: ['scripts/bundle_release.py'],
+    details: [
+      'Tars up resolved config, metrics, and plots for distribution.',
+      'Writes artifacts/releases/pipeline_demo.tar.gz.',
+    ],
+    fields: [
+      { name: 'run', label: 'Run Dir (or latest)', type: 'text', default: 'latest' },
+      { name: 'output', label: 'Output Tarball', type: 'text', default: 'artifacts/releases/pipeline_demo.tar.gz' },
+    ],
+    buildCommand(params = {}) {
+      const runParam = params.run || 'latest';
+      const output = params.output || 'artifacts/releases/pipeline_demo.tar.gz';
+      let resolvedRun;
+      try {
+        resolvedRun = resolveTrackBBundleRun(runParam);
+      } catch (err) {
+        throw Object.assign(new Error(`bundle_release: ${err.message}`), { statusCode: 400 });
+      }
+      return {
+        cmd: [BUILD_PY, 'scripts/bundle_release.py', '--run', resolvedRun, '--output', output],
+        cwd: REPO,
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { run: runParam, output },
+      };
+    },
+  },
+  track_b_pipeline: {
+    id: 'track_b_pipeline',
+    label: 'BOCPDMS Pipeline Runner',
+    description: 'Execute the Track B pipeline script for single steps or ranges.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: [path.join('..', 'bocpdms-track', 'scripts', 'track_b_pipeline.py')],
+    details: [
+      'Calls bocpdms-track/scripts/track_b_pipeline.py run ...',
+      'Supports --only/--start/--end to target specific steps.',
+    ],
+    fields: [
+      {
+        name: 'mode',
+        label: 'Mode',
+        type: 'select',
+        options: [
+          { value: 'full', label: 'Full Pipeline' },
+          { value: 'only', label: 'Single Step' },
+          { value: 'range', label: 'Step Range' },
+        ],
+        default: 'full',
+      },
+      { name: 'only_step', label: 'Only Step', type: 'text', default: 'synth-data' },
+      { name: 'start_step', label: 'Start Step', type: 'text', default: 'synth-data' },
+      { name: 'end_step', label: 'End Step', type: 'text', default: 'bundle-release' },
+      {
+        name: 'force',
+        label: 'Force Re-run',
+        type: 'select',
+        options: [
+          { value: 'false', label: 'No' },
+          { value: 'true', label: 'Yes' },
+        ],
+        default: 'false',
+      },
+      {
+        name: 'dry_run',
+        label: 'Dry Run',
+        type: 'select',
+        options: [
+          { value: 'false', label: 'No' },
+          { value: 'true', label: 'Yes' },
+        ],
+        default: 'false',
+      },
+    ],
+    buildCommand(params = {}) {
+      const mode = params.mode || 'full';
+      const cmd = [BUILD_PY, TRACK_B_PIPELINE_SCRIPT, 'run'];
+      const safeOnly = normaliseTrackBStep(params.only_step) || 'synth-data';
+      const safeStart = normaliseTrackBStep(params.start_step) || 'synth-data';
+      const safeEnd = normaliseTrackBStep(params.end_step) || 'bundle-release';
+      if (mode === 'only') {
+        cmd.push('--only', safeOnly);
+      } else if (mode === 'range') {
+        cmd.push('--start', safeStart);
+        if (safeEnd) cmd.push('--end', safeEnd);
+      }
+      if (String(params.force).toLowerCase() === 'true') cmd.push('--force');
+      if (String(params.dry_run).toLowerCase() === 'true') cmd.push('--dry-run');
+      const publicParams = {
+        mode,
+        only_step: safeOnly,
+        start_step: safeStart,
+        end_step: safeEnd,
+        force: String(params.force || 'false') === 'true',
+        dry_run: String(params.dry_run || 'false') === 'true',
+      };
+      return {
+        cmd,
+        cwd: TRACK_B_REPO,
+        env: makeEnv({
+          ALPHA_EXPERIMENTS_ROOT: REPO,
+          PYTHONPATH: experimentsPythonPath(),
+        }),
+        publicParams,
+      };
+    },
+  },
   eval_metrics: {
     id: 'eval_metrics',
     label: 'Detection Quality Audit',
     description: 'Compute headline BOCPD detection metrics over MES labels parquet',
     group: 'Evaluation & Metrics',
     approach: 'bocpd',
+    requiredScripts: ['scripts/detection_metrics.py'],
     details: [
       'Reads BOCPD label parquet and evaluates hit rate, delay, and false alarms.',
       'Writes JSON summary under artifacts/reports/.',
@@ -129,6 +420,7 @@ const BUILD_DEFINITIONS = {
     description: 'Grid cp_thr and break_k via scripts/run_wfo.py',
     group: 'Detection Pipelines',
     approach: 'bocpd',
+    requiredScripts: ['scripts/run_wfo.py'],
     details: [
       'Runs purged walk-forward optimisation over cp_thr & break_k grids.',
       'Writes tolerance metrics per step to artifacts/wfo/.',
@@ -159,6 +451,7 @@ const BUILD_DEFINITIONS = {
     description: 'Full sweep + blend + run via scripts/autotune_and_run.py',
     group: 'Discovery & Tuning',
     approach: 'bocpd',
+    requiredScripts: ['scripts/autotune_and_run.py'],
     details: [
       'Sweeps cp_thr/break_k, blends predictive & economic scores.',
       'Patches config with the winner and runs strategy/report generation.'
@@ -188,6 +481,7 @@ const BUILD_DEFINITIONS = {
     description: 'Run Purged-CV and WFO for promoted candidates',
     group: 'Detection Pipelines',
     approach: 'bocpd',
+    requiredScripts: ['scripts/validate_candidates.py'],
     details: [
       'Loads promoted candidates from runs/promoted_candidates.jsonl.',
       'Executes Purged-CV + WFO validation; writes cv/wfo metrics per run.'
@@ -218,6 +512,7 @@ const BUILD_DEFINITIONS = {
     description: 'Collect best cp_thr sweeps into promoted_candidates.jsonl',
     group: 'Discovery & Tuning',
     approach: 'bocpd',
+    requiredScripts: ['scripts/export_candidates_from_sweeps.py'],
     details: [
       'Scans artifacts/sweeps/** for best cp_thr combinations.',
       'Appends results into runs/promoted_candidates.jsonl.'
@@ -238,6 +533,7 @@ const BUILD_DEFINITIONS = {
     description: 'Copy strategy config to bocpd_production.yaml',
     group: 'Promotion',
     approach: 'bocpd',
+    requiredScripts: ['scripts/promote_candidates.py'],
     details: [
       'Copies selected config to bocpd_production.yaml with backup snapshot.',
       'Records promotion metadata under artifacts/promotions/. '
@@ -263,6 +559,7 @@ const BUILD_DEFINITIONS = {
     description: 'Promote best validated WFO run to production config',
     group: 'Promotion',
     approach: 'bocpd',
+    requiredScripts: ['scripts/promote_best_validated.py'],
     details: [
       'Scans validate-* runs for best out-of-sample Sharpe.',
       'Promotes parameter mode into prod config with audit trail.'
@@ -277,274 +574,24 @@ const BUILD_DEFINITIONS = {
       };
     },
   },
-  boosting_train: {
-    id: 'boosting_train',
-    label: 'Boosting Model Training',
-    description: 'Train gradient-boosted baseline on BOCPD labels.',
-    group: 'Boosting & Trees',
-    approach: 'boosting',
-    enabled: true,
-    details: [
-      'Fits HistGradientBoosting or RandomForest baselines over discovery labels.',
-      'Writes model + training metrics under artifacts/models/boosting/.',
-    ],
-    fields: [
-      { name: 'dataset', label: 'Dataset Manifest', type: 'text', default: 'artifacts/datasets/mes_1s/manifest.json' },
-      { name: 'labels', label: 'Labels Parquet', type: 'text', default: 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet' },
-      { name: 'out', label: 'Output Dir', type: 'text', default: 'artifacts/models/boosting' },
-      { name: 'model_type', label: 'Model Type', type: 'select', options: [
-        { value: 'hist_gbdt', label: 'HistGradientBoosting' },
-        { value: 'random_forest', label: 'Random Forest' },
-      ], default: 'hist_gbdt' },
-      { name: 'n_estimators', label: 'Estimators', type: 'number', default: 300 },
-      { name: 'learning_rate', label: 'Learning Rate', type: 'number', default: 0.05 },
-      { name: 'max_depth', label: 'Max Depth', type: 'number', default: 6 },
-    ],
-    buildCommand(params = {}) {
-      const dataset = params.dataset || 'artifacts/datasets/mes_1s/manifest.json';
-      const labels = params.labels || 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet';
-      const outDir = params.out || 'artifacts/models/boosting';
-      const modelType = params.model_type || 'hist_gbdt';
-      const nEstimators = Number.isFinite(Number(params.n_estimators)) ? String(Math.max(10, Math.floor(Number(params.n_estimators)))) : '300';
-      const learningRate = params.learning_rate !== undefined ? String(Number(params.learning_rate)) : '0.05';
-      const maxDepth = params.max_depth !== undefined ? String(Math.floor(Number(params.max_depth))) : '6';
-      return {
-        cmd: [
-          BUILD_PY,
-          'scripts/train_boosting_model.py',
-          '--dataset-manifest', dataset,
-          '--labels', labels,
-          '--out-dir', outDir,
-          '--model-type', modelType,
-          '--n-estimators', nEstimators,
-          '--learning-rate', learningRate,
-          '--max-depth', maxDepth,
-        ],
-        cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src:/home/jason/ml/regime_detection/src' }),
-        publicParams: {
-          dataset,
-          labels,
-          out: outDir,
-          model_type: modelType,
-          n_estimators: Number(nEstimators),
-          learning_rate: Number(learningRate),
-          max_depth: Number(maxDepth),
-        },
-      };
-    },
-  },
-  boosting_eval: {
-    id: 'boosting_eval',
-    label: 'Boosting Model Evaluation',
-    description: 'Evaluate trained boosting model on holdout data.',
-    group: 'Boosting & Trees',
-    approach: 'boosting',
-    enabled: true,
-    details: [
-      'Computes ROC/PR metrics and top alerts from boosting model outputs.',
-      'Writes evaluation_metrics.json alongside model artifacts.',
-    ],
-    fields: [
-      { name: 'model_dir', label: 'Model Dir', type: 'text', default: 'artifacts/models/boosting' },
-      { name: 'dataset', label: 'Dataset Manifest', type: 'text', default: 'artifacts/datasets/mes_1s/manifest.json' },
-      { name: 'labels', label: 'Labels Parquet', type: 'text', default: 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet' },
-      { name: 'out', label: 'Output JSON', type: 'text', default: 'artifacts/models/boosting/evaluation_metrics.json' },
-      { name: 'max_samples', label: 'Max Samples', type: 'number', default: 150000 },
-    ],
-    buildCommand(params = {}) {
-      const modelDir = params.model_dir || 'artifacts/models/boosting';
-      const dataset = params.dataset || 'artifacts/datasets/mes_1s/manifest.json';
-      const labels = params.labels || 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet';
-      const outFile = params.out || path.join(modelDir, 'evaluation_metrics.json');
-      const maxSamples = Number.isFinite(Number(params.max_samples)) ? String(Math.max(0, Math.floor(Number(params.max_samples)))) : '150000';
-      return {
-        cmd: [
-          BUILD_PY,
-          'scripts/evaluate_boosting_model.py',
-          '--model-dir', modelDir,
-          '--dataset-manifest', dataset,
-          '--labels', labels,
-          '--out', outFile,
-          '--max-samples', maxSamples,
-        ],
-        cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src:/home/jason/ml/regime_detection/src' }),
-        publicParams: {
-          model_dir: modelDir,
-          dataset,
-          labels,
-          out: outFile,
-          max_samples: Number(maxSamples),
-        },
-      };
-    },
-  },
-  sequence_train: {
-    id: 'sequence_train',
-    label: 'Sequence Model Training',
-    description: 'Train causal temporal CNN using seq_models pipeline.',
-    group: 'Sequence Models',
-    approach: 'sequence',
-    enabled: true,
-    details: [
-      'Consumes feature windows and emits latency comparison report.',
-      'Drops trained weights under artifacts/models/sequence_cnn/.',
-    ],
-    fields: [
-      { name: 'dataset', label: 'Dataset Manifest', type: 'text', default: 'artifacts/datasets/mes_1s/manifest.json' },
-      { name: 'labels', label: 'Labels Parquet', type: 'text', default: 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet' },
-      { name: 'out', label: 'Output Dir', type: 'text', default: 'artifacts/models/sequence_cnn' },
-      { name: 'max_samples', label: 'Max Samples', type: 'number', default: 200000 },
-      { name: 'window', label: 'Window', type: 'number', default: 64 },
-    ],
-    buildCommand(params = {}) {
-      const dataset = params.dataset || 'artifacts/datasets/mes_1s/manifest.json';
-      const labels = params.labels || 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet';
-      const outDir = params.out || 'artifacts/models/sequence_cnn';
-      const maxSamples = Number.isFinite(Number(params.max_samples)) ? String(Math.max(0, Math.floor(Number(params.max_samples)))) : '200000';
-      const window = Number.isFinite(Number(params.window)) ? String(Math.max(2, Math.floor(Number(params.window)))) : '64';
-      return {
-        cmd: [
-          BUILD_PY,
-          'scripts/train_sequence_model.py',
-          '--dataset-manifest',
-          dataset,
-          '--labels',
-          labels,
-          '--out-dir',
-          outDir,
-          '--max-samples',
-          maxSamples,
-          '--window',
-          window,
-        ],
-        cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src:/home/jason/ml/regime_detection/src' }),
-        publicParams: {
-          dataset,
-          labels,
-          out: outDir,
-          max_samples: Number(maxSamples),
-          window: Number(window),
-        },
-      };
-    },
-  },
-  sequence_eval: {
-    id: 'sequence_eval',
-    label: 'Sequence Model Evaluation',
-    description: 'Run holdout evaluation on the trained sequence model and emit metrics.',
-    group: 'Sequence Models',
-    approach: 'sequence',
-    enabled: true,
-    details: [
-      'Computes ROC/PR metrics and top alerts for the latest checkpoint.',
-      'Writes evaluation report alongside training artifacts.',
-    ],
-    fields: [
-      { name: 'model_dir', label: 'Model Dir', type: 'text', default: 'artifacts/models/sequence_cnn' },
-      { name: 'dataset', label: 'Dataset Manifest', type: 'text', default: 'artifacts/datasets/mes_1s/manifest.json' },
-      { name: 'labels', label: 'Labels Parquet', type: 'text', default: 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet' },
-      { name: 'out', label: 'Output JSON', type: 'text', default: 'artifacts/models/sequence_cnn/evaluation_metrics.json' },
-      { name: 'max_samples', label: 'Max Samples', type: 'number', default: 150000 },
-    ],
-    buildCommand(params = {}) {
-      const modelDir = params.model_dir || 'artifacts/models/sequence_cnn';
-      const dataset = params.dataset || 'artifacts/datasets/mes_1s/manifest.json';
-      const labels = params.labels || 'artifacts/bocpd_discovery/mes_1s/bocpd_signals.parquet';
-      const outFile = params.out || path.join(modelDir, 'evaluation_metrics.json');
-      const maxSamples = Number.isFinite(Number(params.max_samples)) ? String(Math.max(0, Math.floor(Number(params.max_samples)))) : '150000';
-      return {
-        cmd: [
-          BUILD_PY,
-          'scripts/evaluate_sequence_model.py',
-          '--model-dir',
-          modelDir,
-          '--dataset-manifest',
-          dataset,
-          '--labels',
-          labels,
-          '--out',
-          outFile,
-          '--max-samples',
-          maxSamples,
-        ],
-        cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src:/home/jason/ml/regime_detection/src' }),
-        publicParams: {
-          model_dir: modelDir,
-          dataset,
-          labels,
-          out: outFile,
-          max_samples: Number(maxSamples),
-        },
-      };
-    },
-  },
-  hmm_train: {
-    id: 'hmm_train',
-    label: 'Hidden Markov Fit',
-    description: 'Run sticky HMM labeling over feature series and emit change points.',
-    group: 'Probabilistic Models',
-    approach: 'hmm',
-    enabled: true,
-    details: [
-      'Derives latent regimes via sticky HMM and writes state/change-point artifacts.',
-    ],
-    fields: [
-      { name: 'dataset', label: 'Dataset Manifest', type: 'text', default: 'artifacts/datasets/mes_1s/manifest.json' },
-      { name: 'out', label: 'Output Dir', type: 'text', default: 'artifacts/labels/hmm' },
-      { name: 'series_col', label: 'Series Column', type: 'text', default: 'trend_snr' },
-      { name: 'compute_trend_snr', label: 'Compute SNR', type: 'select', options: [
-        { value: 'true', label: 'Yes' },
-        { value: 'false', label: 'No' },
-      ], default: 'true' },
-      { name: 'n_states', label: 'States', type: 'number', default: 3 },
-    ],
-    buildCommand(params = {}) {
-      const dataset = params.dataset || 'artifacts/datasets/mes_1s/manifest.json';
-      const outDir = params.out || 'artifacts/labels/hmm';
-      const seriesCol = params.series_col || 'trend_snr';
-      const computeSnr = String(params.compute_trend_snr || 'true').toLowerCase() === 'true';
-      const nStates = Number.isFinite(Number(params.n_states)) ? String(Math.max(2, Math.floor(Number(params.n_states)))) : '3';
-      const cmd = [
-        BUILD_PY,
-        'scripts/run_hmm_labeling.py',
-        '--dataset-manifest', dataset,
-        '--out-dir', outDir,
-        '--series-col', seriesCol,
-        '--n-states', nStates,
-        '--min-run', '5',
-      ];
-      if (computeSnr) cmd.push('--compute-trend-snr');
-      return {
-        cmd,
-        cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src:/home/jason/ml/regime_detection/src' }),
-        publicParams: {
-          dataset,
-          out: outDir,
-          series_col: seriesCol,
-          compute_trend_snr: computeSnr,
-          n_states: Number(nStates),
-        },
-      };
-    },
-  },
 };
 
 function serializeDefinitions() {
-  return Object.values(BUILD_DEFINITIONS).map((def) => ({
-    id: def.id,
-    label: def.label,
-    description: def.description,
-    fields: def.fields,
-    group: def.group || 'Other',
-    details: def.details || [],
-    approach: def.approach || 'other',
-    enabled: def.enabled !== false,
-  }));
+  return Object.values(BUILD_DEFINITIONS).map((def) => {
+    const availability = definitionAvailability(def);
+    return {
+      id: def.id,
+      label: def.label,
+      description: def.description,
+      fields: def.fields,
+      group: def.group || 'Other',
+      details: def.details || [],
+      approach: def.approach || 'other',
+      enabled: availability.enabled,
+      disabled_reason: availability.reason,
+      missing_scripts: availability.missingScripts,
+    };
+  });
 }
 
 function formatStamp(date = new Date()) {
@@ -571,57 +618,43 @@ app.get('/api', (req, res) => {
 });
 
 app.get('/api/health', async (req, res) => {
+  const definitions = serializeDefinitions();
+  const disabledJobs = definitions
+    .filter((def) => def.enabled === false)
+    .map((def) => ({
+      id: def.id,
+      label: def.label,
+      reason: def.disabled_reason,
+      missing_scripts: def.missing_scripts,
+      approach: def.approach,
+    }));
   try {
     const st = await fsp.stat(REPO);
     const runsOk = await fsp.stat(readers.RUNS_ROOT).then((s) => s.isDirectory()).catch(() => false);
-    res.json({ ok: st.isDirectory() && runsOk, repo: REPO, runs_root: readers.RUNS_ROOT, runs_ok: runsOk, kanban: KANBAN });
+    res.json({
+      ok: st.isDirectory() && runsOk,
+      repo: REPO,
+      runs_root: readers.RUNS_ROOT,
+      runs_ok: runsOk,
+      kanban: KANBAN,
+      disabled_jobs: disabledJobs,
+    });
   } catch (e) {
     const runsOk = await fsp.stat(readers.RUNS_ROOT).then((s) => s.isDirectory()).catch(() => false);
-    res.json({ ok: false, repo: REPO, runs_root: readers.RUNS_ROOT, runs_ok: runsOk, error: String(e), kanban: KANBAN });
+    res.json({
+      ok: false,
+      repo: REPO,
+      runs_root: readers.RUNS_ROOT,
+      runs_ok: runsOk,
+      error: String(e),
+      kanban: KANBAN,
+      disabled_jobs: disabledJobs,
+    });
   }
 });
 
 async function readJsonSafe(p) {
   try { return JSON.parse(await fsp.readFile(p, 'utf8')); } catch { return null; }
-}
-
-async function resolveSequenceModelDir() {
-  const candidates = [
-    path.join(REPO, SEQUENCE_MODEL_DIR),
-    path.join(REPO, 'artifacts', 'reports'),
-  ];
-  for (const dir of candidates) {
-    const modelPath = path.join(dir, 'sequence_model.pt');
-    try {
-      const st = await fsp.stat(modelPath);
-      if (st?.isFile()) return dir;
-    } catch {}
-  }
-  return path.join(REPO, SEQUENCE_MODEL_DIR);
-}
-
-async function resolveBoostingModelDir() {
-  const candidates = [
-    path.join(REPO, BOOSTING_MODEL_DIR),
-    path.join(REPO, 'artifacts', 'reports'),
-  ];
-  for (const dir of candidates) {
-    const modelPath = path.join(dir, 'boosting_model.pkl');
-    try {
-      const st = await fsp.stat(modelPath);
-      if (st?.isFile()) return dir;
-    } catch {}
-  }
-  return path.join(REPO, BOOSTING_MODEL_DIR);
-}
-
-async function resolveHMMDir() {
-  const dir = path.join(REPO, HMM_LABEL_DIR);
-  try {
-    const st = await fsp.stat(dir);
-    if (st?.isDirectory()) return dir;
-  } catch {}
-  return dir;
 }
 
 app.get('/api/sweeps', async (req, res) => {
@@ -971,8 +1004,13 @@ app.post('/api/builds/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Unknown build job' });
     }
     const def = BUILD_DEFINITIONS[jobId];
-    if (def.enabled === false) {
-      return res.status(400).json({ ok: false, error: 'Job not enabled yet' });
+    const availability = definitionAvailability(def);
+    if (!availability.enabled) {
+      return res.status(400).json({
+        ok: false,
+        error: availability.reason || 'Job not enabled yet',
+        missing_scripts: availability.missingScripts,
+      });
     }
     const details = def.buildCommand ? def.buildCommand(params) : null;
     if (!details || !Array.isArray(details.cmd) || details.cmd.length === 0) {
@@ -1195,79 +1233,6 @@ app.get('/api/kanban/tasks', async (req, res) => {
     res.json(js);
   } catch (e) {
     res.status(500).json({ error: 'kanban unavailable', detail: String(e) });
-  }
-});
-
-app.get('/api/models/sequence', async (req, res) => {
-  try {
-    const dir = await resolveSequenceModelDir();
-    const summary = await readJsonSafe(path.join(dir, 'summary.json'));
-    const training = await readJsonSafe(path.join(dir, 'training_metrics.json'));
-    const latency = await readJsonSafe(path.join(dir, 'latency_metrics.json'));
-    const evaluation = await readJsonSafe(path.join(dir, 'evaluation_metrics.json'));
-    let modelStat = null;
-    try {
-      modelStat = await fsp.stat(path.join(dir, 'sequence_model.pt'));
-    } catch {}
-    if (!summary && !training && !evaluation && !modelStat) {
-      return res.status(404).json({ ok: false, error: 'sequence model artifacts not found' });
-    }
-    res.json({
-      ok: true,
-      model_dir: dir,
-      summary,
-      training,
-      latency,
-      evaluation,
-      model_updated_at: modelStat ? modelStat.mtime.toISOString() : null,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: 'failed to load sequence model info', detail: String(e) });
-  }
-});
-
-app.get('/api/models/boosting', async (req, res) => {
-  try {
-    const dir = await resolveBoostingModelDir();
-    const summary = await readJsonSafe(path.join(dir, 'summary.json'));
-    const training = await readJsonSafe(path.join(dir, 'training_metrics.json'));
-    const evaluation = await readJsonSafe(path.join(dir, 'evaluation_metrics.json'));
-    let modelStat = null;
-    try {
-      modelStat = await fsp.stat(path.join(dir, 'boosting_model.pkl'));
-    } catch {}
-    if (!summary && !training && !evaluation && !modelStat) {
-      return res.status(404).json({ ok: false, error: 'boosting model artifacts not found' });
-    }
-    res.json({
-      ok: true,
-      model_dir: dir,
-      summary,
-      training,
-      evaluation,
-      model_updated_at: modelStat ? modelStat.mtime.toISOString() : null,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: 'failed to load boosting model info', detail: String(e) });
-  }
-});
-
-app.get('/api/labels/hmm', async (req, res) => {
-  try {
-    const dir = await resolveHMMDir();
-    const summary = await readJsonSafe(path.join(dir, 'summary.json'));
-    const metrics = await readJsonSafe(path.join(dir, 'metrics.json'));
-    if (!summary && !metrics) {
-      return res.status(404).json({ ok: false, error: 'hmm artifacts not found' });
-    }
-    res.json({
-      ok: true,
-      label_dir: dir,
-      summary,
-      metrics,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: 'failed to load hmm info', detail: String(e) });
   }
 });
 
