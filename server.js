@@ -427,20 +427,20 @@ const BUILD_DEFINITIONS = {
       'Use run ID to differentiate scenarios.'
     ],
     fields: [
-      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/_local.bocpd_gated.yaml' },
+      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/wfo_mes.yaml' },
       { name: 'out_run_id', label: 'Run ID', type: 'text', default: 'wfo_bocpd_gated' },
       { name: 'cp_thr', label: 'cp_thr grid', type: 'text', default: '0.05,0.08,0.12' },
       { name: 'break_k', label: 'break_k grid', type: 'text', default: '0.03,0.05' },
     ],
     buildCommand(params = {}) {
-      const baseConfig = params.base_config || 'configs/_local.bocpd_gated.yaml';
+      const baseConfig = params.base_config || 'configs/wfo_mes.yaml';
       const outRun = params.out_run_id || 'wfo_bocpd_gated';
       const cpThr = params.cp_thr || '0.05,0.08,0.12';
       const breakK = params.break_k || '0.03,0.05';
       return {
         cmd: [BUILD_PY, 'scripts/run_wfo.py', '--base-config', baseConfig, '--out-run-id', outRun, '--cp-thr', cpThr, '--break-k', breakK],
         cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src' }),
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
         publicParams: { base_config: baseConfig, out_run_id: outRun, cp_thr: cpThr, break_k: breakK },
       };
     },
