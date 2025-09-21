@@ -487,22 +487,39 @@ const BUILD_DEFINITIONS = {
       'Executes Purged-CV + WFO validation; writes cv/wfo metrics per run.'
     ],
     fields: [
-      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/_local.bocpd_gated.yaml' },
-      { name: 'profile', label: 'Profile', type: 'select', options: [
-        { value: 'production', label: 'Production' },
-        { value: 'discovery', label: 'Discovery' },
-      ], default: 'production' },
-      { name: 'max_workers', label: 'Max Workers', type: 'number', default: 8 },
+      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/validate_mes.yaml' },
+      { name: 'candidates', label: 'Candidates JSONL', type: 'text', default: 'runs/promoted_candidates.jsonl' },
+      { name: 'summary', label: 'Summary Output', type: 'text', default: 'runs/validated_candidates/summary.json' },
+      { name: 'limit', label: 'Limit (optional)', type: 'number', default: 0 },
     ],
     buildCommand(params = {}) {
-      const baseConfig = params.base_config || 'configs/_local.bocpd_gated.yaml';
-      const profile = params.profile || 'production';
-      const maxWorkers = Number.isFinite(Number(params.max_workers)) ? String(Number(params.max_workers)) : '8';
+      const baseConfig = params.base_config || 'configs/validate_mes.yaml';
+      const candidates = params.candidates || 'runs/promoted_candidates.jsonl';
+      const summary = params.summary || 'runs/validated_candidates/summary.json';
+      const limit = Number.isFinite(Number(params.limit)) && Number(params.limit) > 0 ? String(Number(params.limit)) : null;
+      const cmd = [
+        BUILD_PY,
+        'scripts/validate_candidates.py',
+        '--base-config',
+        baseConfig,
+        '--candidates',
+        candidates,
+        '--out-dir',
+        'runs/validated_candidates',
+        '--summary',
+        summary,
+      ];
+      if (limit) cmd.push('--limit', limit);
       return {
-        cmd: [BUILD_PY, 'scripts/validate_candidates.py', '--base-config', baseConfig, '--profile', profile, '--max-workers', maxWorkers],
+        cmd,
         cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src' }),
-        publicParams: { base_config: baseConfig, profile, max_workers: Number(maxWorkers) },
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: {
+          base_config: baseConfig,
+          candidates,
+          summary,
+          limit: limit ? Number(limit) : undefined,
+        },
       };
     },
   },
