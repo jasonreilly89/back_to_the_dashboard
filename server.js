@@ -556,17 +556,24 @@ const BUILD_DEFINITIONS = {
       'Records promotion metadata under artifacts/promotions/. '
     ],
     fields: [
-      { name: 'config', label: 'Source Config', type: 'text', default: 'configs/_local.bocpd_gated.yaml' },
+      { name: 'source', label: 'Source Config', type: 'text', default: 'configs/run_mes_bocpd_breakout.yaml' },
       { name: 'dest', label: 'Destination', type: 'text', default: 'bocpd_production.yaml' },
+      { name: 'note', label: 'Note', type: 'text', default: '' },
+      { name: 'extra', label: 'Extra Metadata JSON', type: 'text', default: '' },
     ],
     buildCommand(params = {}) {
-      const src = params.config || 'configs/_local.bocpd_gated.yaml';
+      const src = params.source || 'configs/run_mes_bocpd_breakout.yaml';
       const dest = params.dest || 'bocpd_production.yaml';
+      const note = params.note ? String(params.note) : null;
+      const extra = params.extra ? String(params.extra) : null;
+      const cmd = [BUILD_PY, 'scripts/promote_candidates.py', '--source', src, '--dest', dest];
+      if (note) cmd.push('--note', note);
+      if (extra) cmd.push('--extra', extra);
       return {
-        cmd: [BUILD_PY, 'scripts/promote_candidates.py', '--config', src, '--dest', dest],
+        cmd,
         cwd: REPO,
-        env: makeEnv(),
-        publicParams: { config: src, dest },
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { source: src, dest, note: note || undefined, extra: extra || undefined },
       };
     },
   },
@@ -581,13 +588,33 @@ const BUILD_DEFINITIONS = {
       'Scans validate-* runs for best out-of-sample Sharpe.',
       'Promotes parameter mode into prod config with audit trail.'
     ],
-    fields: [],
-    buildCommand() {
+    fields: [
+      { name: 'summary', label: 'Validated Summary', type: 'text', default: 'runs/validated_candidates/summary.json' },
+      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/run_mes_bocpd_breakout.yaml' },
+      { name: 'dest', label: 'Destination', type: 'text', default: 'bocpd_production.yaml' },
+      { name: 'note', label: 'Note', type: 'text', default: '' },
+    ],
+    buildCommand(params = {}) {
+      const summary = params.summary || 'runs/validated_candidates/summary.json';
+      const baseConfig = params.base_config || 'configs/run_mes_bocpd_breakout.yaml';
+      const dest = params.dest || 'bocpd_production.yaml';
+      const note = params.note ? String(params.note) : null;
+      const cmd = [
+        BUILD_PY,
+        'scripts/promote_best_validated.py',
+        '--summary',
+        summary,
+        '--base-config',
+        baseConfig,
+        '--dest',
+        dest,
+      ];
+      if (note) cmd.push('--note', note);
       return {
-        cmd: [BUILD_PY, 'scripts/promote_best_validated.py'],
+        cmd,
         cwd: REPO,
-        env: makeEnv(),
-        publicParams: {},
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { summary, base_config: baseConfig, dest, note: note || undefined },
       };
     },
   },
