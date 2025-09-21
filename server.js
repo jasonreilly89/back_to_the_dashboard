@@ -522,7 +522,7 @@ const BUILD_DEFINITIONS = {
       return {
         cmd: [BUILD_PY, 'scripts/export_candidates_from_sweeps.py'],
         cwd: REPO,
-        env: makeEnv(),
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
         publicParams: {},
       };
     },
