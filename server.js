@@ -32,6 +32,9 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/api/runs/:id/equity', description: 'Stream equity.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/trades', description: 'Paginate trades.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/roundtrips', description: 'Derive round-trip stats from trades' },
+  { method: 'GET', path: '/api/runs/:id/cpd/series', description: 'Stream CPD context series (cp_prob, runlen)' },
+  { method: 'GET', path: '/api/runs/:id/cpd/models', description: 'Stream CPD model posterior series' },
+  { method: 'GET', path: '/api/runs/:id/cpd/summary', description: 'Aggregate CPD metrics for a run' },
   { method: 'GET', path: '/api/latest-run', description: 'Return most recent run summary' },
   { method: 'GET', path: '/api/logs', description: 'Browse raw pipeline log files' },
   { method: 'GET', path: '/api/autotune', description: 'Summarize autotune sweep logs' },
@@ -427,20 +430,20 @@ const BUILD_DEFINITIONS = {
       'Use run ID to differentiate scenarios.'
     ],
     fields: [
-      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/_local.bocpd_gated.yaml' },
+      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/wfo_mes.yaml' },
       { name: 'out_run_id', label: 'Run ID', type: 'text', default: 'wfo_bocpd_gated' },
       { name: 'cp_thr', label: 'cp_thr grid', type: 'text', default: '0.05,0.08,0.12' },
       { name: 'break_k', label: 'break_k grid', type: 'text', default: '0.03,0.05' },
     ],
     buildCommand(params = {}) {
-      const baseConfig = params.base_config || 'configs/_local.bocpd_gated.yaml';
+      const baseConfig = params.base_config || 'configs/wfo_mes.yaml';
       const outRun = params.out_run_id || 'wfo_bocpd_gated';
       const cpThr = params.cp_thr || '0.05,0.08,0.12';
       const breakK = params.break_k || '0.03,0.05';
       return {
         cmd: [BUILD_PY, 'scripts/run_wfo.py', '--base-config', baseConfig, '--out-run-id', outRun, '--cp-thr', cpThr, '--break-k', breakK],
         cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src' }),
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
         publicParams: { base_config: baseConfig, out_run_id: outRun, cp_thr: cpThr, break_k: breakK },
       };
     },
@@ -487,22 +490,39 @@ const BUILD_DEFINITIONS = {
       'Executes Purged-CV + WFO validation; writes cv/wfo metrics per run.'
     ],
     fields: [
-      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/_local.bocpd_gated.yaml' },
-      { name: 'profile', label: 'Profile', type: 'select', options: [
-        { value: 'production', label: 'Production' },
-        { value: 'discovery', label: 'Discovery' },
-      ], default: 'production' },
-      { name: 'max_workers', label: 'Max Workers', type: 'number', default: 8 },
+      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/validate_mes.yaml' },
+      { name: 'candidates', label: 'Candidates JSONL', type: 'text', default: 'runs/promoted_candidates.jsonl' },
+      { name: 'summary', label: 'Summary Output', type: 'text', default: 'runs/validated_candidates/summary.json' },
+      { name: 'limit', label: 'Limit (optional)', type: 'number', default: 0 },
     ],
     buildCommand(params = {}) {
-      const baseConfig = params.base_config || 'configs/_local.bocpd_gated.yaml';
-      const profile = params.profile || 'production';
-      const maxWorkers = Number.isFinite(Number(params.max_workers)) ? String(Number(params.max_workers)) : '8';
+      const baseConfig = params.base_config || 'configs/validate_mes.yaml';
+      const candidates = params.candidates || 'runs/promoted_candidates.jsonl';
+      const summary = params.summary || 'runs/validated_candidates/summary.json';
+      const limit = Number.isFinite(Number(params.limit)) && Number(params.limit) > 0 ? String(Number(params.limit)) : null;
+      const cmd = [
+        BUILD_PY,
+        'scripts/validate_candidates.py',
+        '--base-config',
+        baseConfig,
+        '--candidates',
+        candidates,
+        '--out-dir',
+        'runs/validated_candidates',
+        '--summary',
+        summary,
+      ];
+      if (limit) cmd.push('--limit', limit);
       return {
-        cmd: [BUILD_PY, 'scripts/validate_candidates.py', '--base-config', baseConfig, '--profile', profile, '--max-workers', maxWorkers],
+        cmd,
         cwd: REPO,
-        env: makeEnv({ PYTHONPATH: '/home/jason/ml/sparrow/src' }),
-        publicParams: { base_config: baseConfig, profile, max_workers: Number(maxWorkers) },
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: {
+          base_config: baseConfig,
+          candidates,
+          summary,
+          limit: limit ? Number(limit) : undefined,
+        },
       };
     },
   },
@@ -522,7 +542,7 @@ const BUILD_DEFINITIONS = {
       return {
         cmd: [BUILD_PY, 'scripts/export_candidates_from_sweeps.py'],
         cwd: REPO,
-        env: makeEnv(),
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
         publicParams: {},
       };
     },
@@ -539,17 +559,24 @@ const BUILD_DEFINITIONS = {
       'Records promotion metadata under artifacts/promotions/. '
     ],
     fields: [
-      { name: 'config', label: 'Source Config', type: 'text', default: 'configs/_local.bocpd_gated.yaml' },
+      { name: 'source', label: 'Source Config', type: 'text', default: 'configs/run_mes_bocpd_breakout.yaml' },
       { name: 'dest', label: 'Destination', type: 'text', default: 'bocpd_production.yaml' },
+      { name: 'note', label: 'Note', type: 'text', default: '' },
+      { name: 'extra', label: 'Extra Metadata JSON', type: 'text', default: '' },
     ],
     buildCommand(params = {}) {
-      const src = params.config || 'configs/_local.bocpd_gated.yaml';
+      const src = params.source || 'configs/run_mes_bocpd_breakout.yaml';
       const dest = params.dest || 'bocpd_production.yaml';
+      const note = params.note ? String(params.note) : null;
+      const extra = params.extra ? String(params.extra) : null;
+      const cmd = [BUILD_PY, 'scripts/promote_candidates.py', '--source', src, '--dest', dest];
+      if (note) cmd.push('--note', note);
+      if (extra) cmd.push('--extra', extra);
       return {
-        cmd: [BUILD_PY, 'scripts/promote_candidates.py', '--config', src, '--dest', dest],
+        cmd,
         cwd: REPO,
-        env: makeEnv(),
-        publicParams: { config: src, dest },
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { source: src, dest, note: note || undefined, extra: extra || undefined },
       };
     },
   },
@@ -564,13 +591,33 @@ const BUILD_DEFINITIONS = {
       'Scans validate-* runs for best out-of-sample Sharpe.',
       'Promotes parameter mode into prod config with audit trail.'
     ],
-    fields: [],
-    buildCommand() {
+    fields: [
+      { name: 'summary', label: 'Validated Summary', type: 'text', default: 'runs/validated_candidates/summary.json' },
+      { name: 'base_config', label: 'Base Config', type: 'text', default: 'configs/run_mes_bocpd_breakout.yaml' },
+      { name: 'dest', label: 'Destination', type: 'text', default: 'bocpd_production.yaml' },
+      { name: 'note', label: 'Note', type: 'text', default: '' },
+    ],
+    buildCommand(params = {}) {
+      const summary = params.summary || 'runs/validated_candidates/summary.json';
+      const baseConfig = params.base_config || 'configs/run_mes_bocpd_breakout.yaml';
+      const dest = params.dest || 'bocpd_production.yaml';
+      const note = params.note ? String(params.note) : null;
+      const cmd = [
+        BUILD_PY,
+        'scripts/promote_best_validated.py',
+        '--summary',
+        summary,
+        '--base-config',
+        baseConfig,
+        '--dest',
+        dest,
+      ];
+      if (note) cmd.push('--note', note);
       return {
-        cmd: [BUILD_PY, 'scripts/promote_best_validated.py'],
+        cmd,
         cwd: REPO,
-        env: makeEnv(),
-        publicParams: {},
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: { summary, base_config: baseConfig, dest, note: note || undefined },
       };
     },
   },
@@ -737,6 +784,35 @@ app.get('/api/runs/:runId/roundtrips', async (req, res) => {
     res.json(trips);
   } catch (e) {
     res.status(404).json({ error: 'roundtrips unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/series', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const series = await readers.readCpdSeries(req.params.runId, { downsample });
+    res.json(series);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd series unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/models', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const models = await readers.readCpdModels(req.params.runId, { downsample });
+    res.json(models);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd models unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/summary', async (req, res) => {
+  try {
+    const summary = await readers.readCpdSummary(req.params.runId);
+    res.json(summary);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd summary unavailable', detail: String(e) });
   }
 });
 
