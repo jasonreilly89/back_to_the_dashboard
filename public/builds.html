@@ -85,12 +85,13 @@
                 <label class="form-label" for="buildGroup">Category</label>
                 <select class="form-select" id="buildGroup"></select>
               </div>
-              <div class="col-12 col-md-4">
+              <div class="col-12 col-md-4" id="buildJobColumn">
                 <label class="form-label" for="buildJob">Job</label>
                 <select class="form-select" id="buildJob"></select>
                 <div class="form-text" id="buildJobDescription"></div>
               </div>
             </div>
+            <div class="row g-3 align-items-end mt-2 d-none" id="dynamicFieldsRow"></div>
             <div class="mt-3 d-flex gap-2">
               <button type="submit" class="btn btn-primary" id="startSubmit">Start Build</button>
               <button type="button" class="btn btn-outline-secondary" id="resetDefaults">Reset</button>
@@ -206,12 +207,12 @@
       }
 
       function renderDynamicFields(def) {
-        const row = document.getElementById('buildFieldsRow');
-        if (!row) return;
-        while (row.children.length > 1) {
-          row.removeChild(row.lastElementChild);
-        }
-        if (!def || !Array.isArray(def.fields)) return;
+        const container = document.getElementById('dynamicFieldsRow');
+        if (!container) return;
+        container.innerHTML = '';
+        const hasFields = def && Array.isArray(def.fields) && def.fields.length > 0;
+        container.classList.toggle('d-none', !hasFields);
+        if (!hasFields) return;
         def.fields.forEach((field) => {
           const col = document.createElement('div');
           col.className = 'col-12 col-md-4';
@@ -235,13 +236,20 @@
             input.type = field.type === 'number' ? 'number' : 'text';
             input.className = 'form-control';
             if (field.type === 'number') input.step = 'any';
+            if (field.placeholder) input.placeholder = field.placeholder;
             if (field.default !== undefined) input.value = field.default;
           }
           input.id = `field-${field.name}`;
           input.name = field.name;
           col.appendChild(label);
           col.appendChild(input);
-          row.appendChild(col);
+          if (field.help) {
+            const help = document.createElement('div');
+            help.className = 'form-text';
+            help.textContent = field.help;
+            col.appendChild(help);
+          }
+          container.appendChild(col);
         });
       }
 

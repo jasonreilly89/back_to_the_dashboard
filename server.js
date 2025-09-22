@@ -38,6 +38,7 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/api/runs/:id/cpd/events', description: 'List detected change-point events' },
   { method: 'GET', path: '/api/runs/:id/cpd/event_window', description: 'Return data slice around a change-point' },
   { method: 'POST', path: '/api/runs/:id/cpd/clip', description: 'Persist a change-point clip payload' },
+  { method: 'GET', path: '/api/runs/:id/regime_breakdown', description: 'Return regime mix and PnL contributions' },
   { method: 'GET', path: '/api/latest-run', description: 'Return most recent run summary' },
   { method: 'GET', path: '/api/logs', description: 'Browse raw pipeline log files' },
   { method: 'GET', path: '/api/autotune', description: 'Summarize autotune sweep logs' },
@@ -142,11 +143,19 @@ function normaliseTrackBStep(step) {
 }
 
 function experimentsPythonPath() {
+  const experimentsRoot = REPO;
   const experimentsSrc = path.join(REPO, 'src');
   const base = process.env.PYTHONPATH || '/home/jason/ml/sparrow/src';
   const parts = base ? base.split(path.delimiter) : [];
-  if (parts.includes(experimentsSrc)) return base;
-  return parts.length ? `${experimentsSrc}${path.delimiter}${base}` : experimentsSrc;
+
+  const prepend = [];
+  if (!parts.includes(experimentsRoot)) prepend.push(experimentsRoot);
+  if (!parts.includes(experimentsSrc)) prepend.push(experimentsSrc);
+
+  if (prepend.length === 0) {
+    return base;
+  }
+  return prepend.concat(parts).filter(Boolean).join(path.delimiter);
 }
 
 const APPROACHES = {
@@ -322,7 +331,11 @@ const BUILD_DEFINITIONS = {
       if (Number.isFinite(maxRunLen)) overrides.push(`+model.max_run_length=${Math.floor(maxRunLen)}`);
       if (Number.isFinite(cpThreshold)) overrides.push(`+strategy.params.cp_prob_threshold=${cpThreshold}`);
       if (todRaw) overrides.push(`+run.tod_whitelist=${todRaw}`);
-      const cmd = [BUILD_PY, 'scripts/run_local.py', 'configs/run/bocpdms_mes_v1.yaml', '--submit', '--dashboard-url', `http://localhost:${PORT}/api/runs`, ...overrides];
+      const cmd = [BUILD_PY, 'scripts/run_local.py', 'configs/run/bocpdms_mes_v1.yaml'];
+      if (overrides.length > 0) {
+        cmd.push(...overrides);
+      }
+      cmd.push('--submit', '--dashboard-url', `http://localhost:${PORT}/api/runs`);
       return {
         cmd,
         cwd: REPO,
@@ -793,6 +806,60 @@ app.get('/api/runs', async (req, res) => {
   }
 });
 
+app.post('/api/runs', async (req, res) => {
+  const payload = req.body || {};
+  const rawPath = payload.path;
+  if (!rawPath) {
+    return res.status(400).json({ error: 'path field is required' });
+  }
+
+  try {
+    const runsRootReal = await fsp.realpath(readers.RUNS_ROOT).catch(() => readers.RUNS_ROOT);
+    let candidatePath = String(rawPath);
+    if (!path.isAbsolute(candidatePath)) {
+      candidatePath = path.join(readers.RUNS_ROOT, candidatePath);
+    }
+
+    let resolvedPath;
+    try {
+      resolvedPath = await fsp.realpath(candidatePath);
+    } catch (err) {
+      return res.status(404).json({ error: 'run path not found', detail: String(err) });
+    }
+
+    if (!resolvedPath.startsWith(runsRootReal)) {
+      return res.status(400).json({
+        error: 'run path must be within runs root',
+        runs_root: runsRootReal,
+        path: resolvedPath,
+      });
+    }
+
+    const runId = path.relative(runsRootReal, resolvedPath) || path.basename(resolvedPath);
+    const tags = Array.isArray(payload.tags)
+      ? payload.tags.filter((tag) => typeof tag === 'string' && tag.trim() !== '')
+      : [];
+
+    const submission = {
+      name: payload.name || path.basename(runId),
+      run_id: runId,
+      path: resolvedPath,
+      submitted_at: payload.submitted_at || new Date().toISOString(),
+      tags,
+      metrics: typeof payload.metrics === 'object' && payload.metrics !== null ? payload.metrics : undefined,
+      summary: typeof payload.summary === 'object' && payload.summary !== null ? payload.summary : undefined,
+      results_markdown: typeof payload.results_markdown === 'string' ? payload.results_markdown : undefined,
+    };
+
+    const submissionPath = path.join(resolvedPath, 'dashboard_submission.json');
+    await fsp.writeFile(submissionPath, JSON.stringify(submission, null, 2), 'utf8');
+
+    res.status(201).json({ ok: true, run_id: runId, submission_path: submissionPath });
+  } catch (e) {
+    res.status(500).json({ error: 'failed to record run submission', detail: String(e) });
+  }
+});
+
 app.get('/api/runs/:runId/summary', async (req, res) => {
   try {
     const summary = await readers.readSummary(req.params.runId);
@@ -892,6 +959,15 @@ app.post('/api/runs/:runId/cpd/clip', async (req, res) => {
     res.json({ saved: true, path: result.path });
   } catch (e) {
     res.status(500).json({ error: 'failed to save clip', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/regime_breakdown', async (req, res) => {
+  try {
+    const breakdown = await readers.readRegimeBreakdown(req.params.runId);
+    res.json(breakdown);
+  } catch (e) {
+    res.status(404).json({ error: 'regime breakdown unavailable', detail: String(e) });
   }
 });
 

@@ -190,6 +190,39 @@
       </div>
 
       <div class="row g-3 mt-1">
+        <div class="col-12">
+          <div class="card h-100" id="regimeCard">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 m-0">Regime Breakdown</h2>
+                <span class="small text-muted" id="regimeUpdated">—</span>
+              </div>
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                <div class="form-check form-check-inline">
+                  <input class="form-check-input regime-toggle" type="checkbox" value="mean_revert" id="regimeToggleMR" checked>
+                  <label class="form-check-label" for="regimeToggleMR">Mean Revert</label>
+                </div>
+                <div class="form-check form-check-inline">
+                  <input class="form-check-input regime-toggle" type="checkbox" value="breakout" id="regimeToggleBK" checked>
+                  <label class="form-check-label" for="regimeToggleBK">Breakout</label>
+                </div>
+                <button id="regimeExport" class="btn btn-outline-secondary btn-sm ms-auto" type="button">Export PNG</button>
+              </div>
+              <div id="regimeSummary" class="text-muted mb-3">Select a run to view regime breakdown.</div>
+              <div class="row g-3">
+                <div class="col-12 col-lg-6">
+                  <canvas id="regimeTimeChart" height="160"></canvas>
+                </div>
+                <div class="col-12 col-lg-6">
+                  <canvas id="regimePnlChart" height="160"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
         <div class="col-12 col-xl-6">
           <div class="card h-100">
             <div class="card-body">
@@ -436,6 +469,9 @@
       let cpdProbChart;
       let cpdRunlenChart;
       let cpdModelChart;
+      let regimeTimeChart;
+      let regimePnlChart;
+      let regimeData = null;
       async function loadRuns() {
         try {
           const runs = await json('/api/runs');
