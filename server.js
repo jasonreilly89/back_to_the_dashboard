@@ -35,6 +35,7 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/api/runs/:id/cpd/series', description: 'Stream CPD context series (cp_prob, runlen)' },
   { method: 'GET', path: '/api/runs/:id/cpd/models', description: 'Stream CPD model posterior series' },
   { method: 'GET', path: '/api/runs/:id/cpd/summary', description: 'Aggregate CPD metrics for a run' },
+  { method: 'GET', path: '/api/runs/:id/cpd/widgets', description: 'Return widget payloads for CPD visualisations' },
   { method: 'GET', path: '/api/runs/:id/cpd/events', description: 'List detected change-point events' },
   { method: 'GET', path: '/api/runs/:id/cpd/event_window', description: 'Return data slice around a change-point' },
   { method: 'POST', path: '/api/runs/:id/cpd/clip', description: 'Persist a change-point clip payload' },
@@ -850,6 +851,44 @@ app.post('/api/runs/:runId/cpd/clip', async (req, res) => {
     res.json({ saved: true, path: result.path });
   } catch (e) {
     res.status(500).json({ error: 'failed to save clip', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/widgets', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const [series, models, summary] = await Promise.all([
+      readers.readCpdSeries(req.params.runId, { downsample }),
+      readers.readCpdModels(req.params.runId, { downsample }),
+      readers.readCpdSummary(req.params.runId),
+    ]);
+
+    const priceOverlay = Array.isArray(series)
+      ? series.map((row) => ({
+          timestamp: row.timestamp,
+          cp_prob: row.cp_prob ?? null,
+          runlen_expect: row.runlen_expect ?? row.expected_runlen ?? null,
+          runlen_map: row.runlen_map ?? null,
+        }))
+      : [];
+
+    const runlenCurve = priceOverlay.map((row) => ({
+      timestamp: row.timestamp,
+      runlen_map: row.runlen_map,
+      runlen_expect: row.runlen_expect,
+    }));
+
+    res.json({
+      summary,
+      priceOverlay,
+      runlenCurve,
+      modelStack: Array.isArray(models) ? models : [],
+    });
+  } catch (e) {
+    res.status(404).json({ error: 'cpd widgets unavailable', detail: String(e) });
+  }
+});
+
   }
 });
 
