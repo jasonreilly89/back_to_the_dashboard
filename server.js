@@ -32,6 +32,12 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/api/runs/:id/equity', description: 'Stream equity.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/trades', description: 'Paginate trades.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/roundtrips', description: 'Derive round-trip stats from trades' },
+  { method: 'GET', path: '/api/runs/:id/cpd/series', description: 'Stream CPD context series (cp_prob, runlen)' },
+  { method: 'GET', path: '/api/runs/:id/cpd/models', description: 'Stream CPD model posterior series' },
+  { method: 'GET', path: '/api/runs/:id/cpd/summary', description: 'Aggregate CPD metrics for a run' },
+  { method: 'GET', path: '/api/runs/:id/cpd/events', description: 'List detected change-point events' },
+  { method: 'GET', path: '/api/runs/:id/cpd/event_window', description: 'Return data slice around a change-point' },
+  { method: 'POST', path: '/api/runs/:id/cpd/clip', description: 'Persist a change-point clip payload' },
   { method: 'GET', path: '/api/latest-run', description: 'Return most recent run summary' },
   { method: 'GET', path: '/api/logs', description: 'Browse raw pipeline log files' },
   { method: 'GET', path: '/api/autotune', description: 'Summarize autotune sweep logs' },
@@ -781,6 +787,69 @@ app.get('/api/runs/:runId/roundtrips', async (req, res) => {
     res.json(trips);
   } catch (e) {
     res.status(404).json({ error: 'roundtrips unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/series', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const series = await readers.readCpdSeries(req.params.runId, { downsample });
+    res.json(series);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd series unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/models', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const models = await readers.readCpdModels(req.params.runId, { downsample });
+    res.json(models);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd models unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/summary', async (req, res) => {
+  try {
+    const summary = await readers.readCpdSummary(req.params.runId);
+    res.json(summary);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd summary unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/events', async (req, res) => {
+  try {
+    const threshold = req.query.threshold !== undefined ? Number(req.query.threshold) : undefined;
+    const minSpacing = req.query.min_spacing !== undefined ? Number(req.query.min_spacing) : undefined;
+    const limit = req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+    const events = await readers.readCpdEvents(req.params.runId, { threshold, minSpacing, limit });
+    res.json(events);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd events unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/event_window', async (req, res) => {
+  try {
+    const { timestamp, seconds } = req.query;
+    const window = await readers.readCpdWindow(req.params.runId, {
+      timestamp,
+      seconds: seconds !== undefined ? Number(seconds) : undefined,
+    });
+    res.json(window);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd window unavailable', detail: String(e) });
+  }
+});
+
+app.post('/api/runs/:runId/cpd/clip', async (req, res) => {
+  try {
+    const result = await readers.saveCpdClip(req.params.runId, req.body);
+    res.json({ saved: true, path: result.path });
+  } catch (e) {
+    res.status(500).json({ error: 'failed to save clip', detail: String(e) });
   }
 });
 
