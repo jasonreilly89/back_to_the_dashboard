@@ -35,7 +35,10 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/api/runs/:id/cpd/series', description: 'Stream CPD context series (cp_prob, runlen)' },
   { method: 'GET', path: '/api/runs/:id/cpd/models', description: 'Stream CPD model posterior series' },
   { method: 'GET', path: '/api/runs/:id/cpd/summary', description: 'Aggregate CPD metrics for a run' },
+<<<<<<< HEAD
+=======
   { method: 'GET', path: '/api/runs/:id/cpd/widgets', description: 'Return widget payloads for CPD visualisations' },
+>>>>>>> master
   { method: 'GET', path: '/api/runs/:id/cpd/events', description: 'List detected change-point events' },
   { method: 'GET', path: '/api/runs/:id/cpd/event_window', description: 'Return data slice around a change-point' },
   { method: 'POST', path: '/api/runs/:id/cpd/clip', description: 'Persist a change-point clip payload' },
@@ -292,6 +295,48 @@ const BUILD_DEFINITIONS = {
         cwd: REPO,
         env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
         publicParams: { run: runParam, output },
+      };
+    },
+  },
+  run_local_bocpdms: {
+    id: 'run_local_bocpdms',
+    label: 'Run Local BOCPDMS Profiles',
+    description: 'Execute scripts/run_local.py with configurable parameters and submit results to the dashboard.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: ['scripts/run_local.py', 'configs/run/bocpdms_mes_v1.yaml'],
+    details: [
+      'Runs the bocpdms_mes_v1 configuration for each configured profile (day/week).',
+      'Allows overriding hazard lambda, max run length, cp_prob threshold, and ToD whitelist buckets.',
+      'Submits resulting runs so CPD dashboards update automatically.',
+    ],
+    fields: [
+      { name: 'hazard_lambda', label: 'λ (hazard)', type: 'number', default: 288 },
+      { name: 'max_run_length', label: 'L (max run length)', type: 'number', default: 3600 },
+      { name: 'cp_prob_threshold', label: 'τ (cp_prob threshold)', type: 'number', default: 0.35 },
+      { name: 'tod_whitelist', label: 'ToD buckets JSON', type: 'text', default: '[{"start":"08:30","end":"15:00"}]' },
+    ],
+    buildCommand(params = {}) {
+      const overrides = [];
+      const lambdaVal = params.hazard_lambda !== undefined ? Number(params.hazard_lambda) : 288;
+      const maxRunLen = params.max_run_length !== undefined ? Number(params.max_run_length) : 3600;
+      const cpThreshold = params.cp_prob_threshold !== undefined ? Number(params.cp_prob_threshold) : 0.35;
+      const todRaw = params.tod_whitelist ? String(params.tod_whitelist).trim() : '[{"start":"08:30","end":"15:00"}]';
+      if (Number.isFinite(lambdaVal)) overrides.push(`+model.hazard_lambda=${lambdaVal}`);
+      if (Number.isFinite(maxRunLen)) overrides.push(`+model.max_run_length=${Math.floor(maxRunLen)}`);
+      if (Number.isFinite(cpThreshold)) overrides.push(`+strategy.params.cp_prob_threshold=${cpThreshold}`);
+      if (todRaw) overrides.push(`+run.tod_whitelist=${todRaw}`);
+      const cmd = [BUILD_PY, 'scripts/run_local.py', 'configs/run/bocpdms_mes_v1.yaml', '--submit', '--dashboard-url', `http://localhost:${PORT}/api/runs`, ...overrides];
+      return {
+        cmd,
+        cwd: REPO,
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: {
+          hazard_lambda: lambdaVal,
+          max_run_length: maxRunLen,
+          cp_prob_threshold: cpThreshold,
+          tod_whitelist: todRaw,
+        },
       };
     },
   },
@@ -854,6 +899,8 @@ app.post('/api/runs/:runId/cpd/clip', async (req, res) => {
   }
 });
 
+<<<<<<< HEAD
+=======
 app.get('/api/runs/:runId/cpd/widgets', async (req, res) => {
   try {
     const downsample = Number.parseInt(req.query.downsample, 10);
@@ -892,6 +939,7 @@ app.get('/api/runs/:runId/cpd/widgets', async (req, res) => {
   }
 });
 
+>>>>>>> master
 app.get('/api/latest-run', async (req, res) => {
   try {
     const runsRoot = path.join(REPO, 'runs');
