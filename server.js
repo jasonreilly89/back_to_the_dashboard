@@ -32,6 +32,10 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/api/runs/:id/equity', description: 'Stream equity.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/trades', description: 'Paginate trades.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/roundtrips', description: 'Derive round-trip stats from trades' },
+  { method: 'GET', path: '/api/runs/:id/cpd/series', description: 'Stream CPD context series (cp_prob, runlen)' },
+  { method: 'GET', path: '/api/runs/:id/cpd/models', description: 'Stream CPD model posterior series' },
+  { method: 'GET', path: '/api/runs/:id/cpd/summary', description: 'Aggregate CPD metrics for a run' },
+  { method: 'GET', path: '/api/runs/:id/cpd/widgets', description: 'Return widget payloads for CPD visualisations' },
   { method: 'GET', path: '/api/latest-run', description: 'Return most recent run summary' },
   { method: 'GET', path: '/api/logs', description: 'Browse raw pipeline log files' },
   { method: 'GET', path: '/api/autotune', description: 'Summarize autotune sweep logs' },
@@ -781,6 +785,70 @@ app.get('/api/runs/:runId/roundtrips', async (req, res) => {
     res.json(trips);
   } catch (e) {
     res.status(404).json({ error: 'roundtrips unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/series', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const series = await readers.readCpdSeries(req.params.runId, { downsample });
+    res.json(series);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd series unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/models', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const models = await readers.readCpdModels(req.params.runId, { downsample });
+    res.json(models);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd models unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/summary', async (req, res) => {
+  try {
+    const summary = await readers.readCpdSummary(req.params.runId);
+    res.json(summary);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd summary unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/widgets', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const [series, models, summary] = await Promise.all([
+      readers.readCpdSeries(req.params.runId, { downsample }),
+      readers.readCpdModels(req.params.runId, { downsample }),
+      readers.readCpdSummary(req.params.runId),
+    ]);
+
+    const priceOverlay = Array.isArray(series)
+      ? series.map((row) => ({
+          timestamp: row.timestamp,
+          cp_prob: row.cp_prob ?? null,
+          runlen_expect: row.runlen_expect ?? row.expected_runlen ?? null,
+          runlen_map: row.runlen_map ?? null,
+        }))
+      : [];
+
+    const runlenCurve = priceOverlay.map((row) => ({
+      timestamp: row.timestamp,
+      runlen_map: row.runlen_map,
+      runlen_expect: row.runlen_expect,
+    }));
+
+    res.json({
+      summary,
+      priceOverlay,
+      runlenCurve,
+      modelStack: Array.isArray(models) ? models : [],
+    });
+  } catch (e) {
+    res.status(404).json({ error: 'cpd widgets unavailable', detail: String(e) });
   }
 });
 
