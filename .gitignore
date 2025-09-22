@@ -6,9 +6,10 @@ __pycache__/
 *.sqlite
 *.log
 
-scripts/
+scripts/*
 *.sh
 *.py
+!scripts/cpd_extract.py
 
 # Local build outputs
 static/dist/
