@@ -32,6 +32,12 @@ const API_ENDPOINTS = [
   { method: 'GET', path: '/api/runs/:id/equity', description: 'Stream equity.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/trades', description: 'Paginate trades.csv for a run' },
   { method: 'GET', path: '/api/runs/:id/roundtrips', description: 'Derive round-trip stats from trades' },
+  { method: 'GET', path: '/api/runs/:id/cpd/series', description: 'Stream CPD context series (cp_prob, runlen)' },
+  { method: 'GET', path: '/api/runs/:id/cpd/models', description: 'Stream CPD model posterior series' },
+  { method: 'GET', path: '/api/runs/:id/cpd/summary', description: 'Aggregate CPD metrics for a run' },
+  { method: 'GET', path: '/api/runs/:id/cpd/events', description: 'List detected change-point events' },
+  { method: 'GET', path: '/api/runs/:id/cpd/event_window', description: 'Return data slice around a change-point' },
+  { method: 'POST', path: '/api/runs/:id/cpd/clip', description: 'Persist a change-point clip payload' },
   { method: 'GET', path: '/api/latest-run', description: 'Return most recent run summary' },
   { method: 'GET', path: '/api/logs', description: 'Browse raw pipeline log files' },
   { method: 'GET', path: '/api/autotune', description: 'Summarize autotune sweep logs' },
@@ -285,6 +291,48 @@ const BUILD_DEFINITIONS = {
         cwd: REPO,
         env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
         publicParams: { run: runParam, output },
+      };
+    },
+  },
+  run_local_bocpdms: {
+    id: 'run_local_bocpdms',
+    label: 'Run Local BOCPDMS Profiles',
+    description: 'Execute scripts/run_local.py with configurable parameters and submit results to the dashboard.',
+    group: 'BOCPDMS Track',
+    approach: 'track_b',
+    requiredScripts: ['scripts/run_local.py', 'configs/run/bocpdms_mes_v1.yaml'],
+    details: [
+      'Runs the bocpdms_mes_v1 configuration for each configured profile (day/week).',
+      'Allows overriding hazard lambda, max run length, cp_prob threshold, and ToD whitelist buckets.',
+      'Submits resulting runs so CPD dashboards update automatically.',
+    ],
+    fields: [
+      { name: 'hazard_lambda', label: 'λ (hazard)', type: 'number', default: 288 },
+      { name: 'max_run_length', label: 'L (max run length)', type: 'number', default: 3600 },
+      { name: 'cp_prob_threshold', label: 'τ (cp_prob threshold)', type: 'number', default: 0.35 },
+      { name: 'tod_whitelist', label: 'ToD buckets JSON', type: 'text', default: '[{"start":"08:30","end":"15:00"}]' },
+    ],
+    buildCommand(params = {}) {
+      const overrides = [];
+      const lambdaVal = params.hazard_lambda !== undefined ? Number(params.hazard_lambda) : 288;
+      const maxRunLen = params.max_run_length !== undefined ? Number(params.max_run_length) : 3600;
+      const cpThreshold = params.cp_prob_threshold !== undefined ? Number(params.cp_prob_threshold) : 0.35;
+      const todRaw = params.tod_whitelist ? String(params.tod_whitelist).trim() : '[{"start":"08:30","end":"15:00"}]';
+      if (Number.isFinite(lambdaVal)) overrides.push(`+model.hazard_lambda=${lambdaVal}`);
+      if (Number.isFinite(maxRunLen)) overrides.push(`+model.max_run_length=${Math.floor(maxRunLen)}`);
+      if (Number.isFinite(cpThreshold)) overrides.push(`+strategy.params.cp_prob_threshold=${cpThreshold}`);
+      if (todRaw) overrides.push(`+run.tod_whitelist=${todRaw}`);
+      const cmd = [BUILD_PY, 'scripts/run_local.py', 'configs/run/bocpdms_mes_v1.yaml', '--submit', '--dashboard-url', `http://localhost:${PORT}/api/runs`, ...overrides];
+      return {
+        cmd,
+        cwd: REPO,
+        env: makeEnv({ PYTHONPATH: experimentsPythonPath() }),
+        publicParams: {
+          hazard_lambda: lambdaVal,
+          max_run_length: maxRunLen,
+          cp_prob_threshold: cpThreshold,
+          tod_whitelist: todRaw,
+        },
       };
     },
   },
@@ -781,6 +829,69 @@ app.get('/api/runs/:runId/roundtrips', async (req, res) => {
     res.json(trips);
   } catch (e) {
     res.status(404).json({ error: 'roundtrips unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/series', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const series = await readers.readCpdSeries(req.params.runId, { downsample });
+    res.json(series);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd series unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/models', async (req, res) => {
+  try {
+    const downsample = Number.parseInt(req.query.downsample, 10);
+    const models = await readers.readCpdModels(req.params.runId, { downsample });
+    res.json(models);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd models unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/summary', async (req, res) => {
+  try {
+    const summary = await readers.readCpdSummary(req.params.runId);
+    res.json(summary);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd summary unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/events', async (req, res) => {
+  try {
+    const threshold = req.query.threshold !== undefined ? Number(req.query.threshold) : undefined;
+    const minSpacing = req.query.min_spacing !== undefined ? Number(req.query.min_spacing) : undefined;
+    const limit = req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+    const events = await readers.readCpdEvents(req.params.runId, { threshold, minSpacing, limit });
+    res.json(events);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd events unavailable', detail: String(e) });
+  }
+});
+
+app.get('/api/runs/:runId/cpd/event_window', async (req, res) => {
+  try {
+    const { timestamp, seconds } = req.query;
+    const window = await readers.readCpdWindow(req.params.runId, {
+      timestamp,
+      seconds: seconds !== undefined ? Number(seconds) : undefined,
+    });
+    res.json(window);
+  } catch (e) {
+    res.status(404).json({ error: 'cpd window unavailable', detail: String(e) });
+  }
+});
+
+app.post('/api/runs/:runId/cpd/clip', async (req, res) => {
+  try {
+    const result = await readers.saveCpdClip(req.params.runId, req.body);
+    res.json({ saved: true, path: result.path });
+  } catch (e) {
+    res.status(500).json({ error: 'failed to save clip', detail: String(e) });
   }
 });
 
