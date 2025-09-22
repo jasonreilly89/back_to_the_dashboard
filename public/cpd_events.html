@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Change-point Event Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <script src="/vendor/chart.js/chart.umd.min.js?v=20250916"></script>
+    <style>
+      body { background:#f8f9fa; }
+      .card { box-shadow:0 2px 8px rgba(0,0,0,0.04); }
+      .event-row { cursor:pointer; }
+      .event-row:hover { background:#f1f5f9; }
+      #eventList { max-height:460px; overflow-y:auto; }
+      .metric-pill { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      pre { background:#0c1021; color:#e6e6e6; padding:12px; border-radius:6px; }
+    </style>
+  </head>
+  <body>
+    <div class="container py-4">
+      <div class="d-flex flex-wrap gap-3 justify-content-between align-items-end mb-3">
+        <div>
+          <h1 class="h4 m-0">Change-point Event Viewer</h1>
+          <div class="small text-muted" id="status">Select a run to begin.</div>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-secondary btn-sm" href="/index.html">Dashboard</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/builds.html">Builds</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/kanban.html">Kanban</a>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-12 col-xl-4">
+          <div class="card h-100">
+            <div class="card-body">
+              <h2 class="h5">Runs & Events</h2>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Run</label>
+                <select id="runSelect" class="form-select form-select-sm"></select>
+              </div>
+              <div class="row g-2 mb-2">
+                <div class="col-5">
+                  <label class="form-label small mb-1">Threshold</label>
+                  <input id="threshold" type="number" step="0.01" class="form-control form-control-sm" value="0.6">
+                </div>
+                <div class="col-5">
+                  <label class="form-label small mb-1">Min spacing (s)</label>
+                  <input id="spacing" type="number" class="form-control form-control-sm" value="45">
+                </div>
+                <div class="col-2 d-flex align-items-end">
+                  <button id="loadEvents" class="btn btn-primary btn-sm w-100">Load</button>
+                </div>
+              </div>
+              <div class="small text-muted" id="eventsInfo">—</div>
+              <div id="eventList" class="mt-2 list-group"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12 col-xl-8">
+          <div class="card h-100 mb-3">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <div>
+                  <h2 class="h5 m-0">Event Context</h2>
+                  <div class="small text-muted" id="eventMeta">Select an event.</div>
+                </div>
+                <button id="saveClip" class="btn btn-outline-secondary btn-sm" disabled>Save Clip</button>
+              </div>
+              <div class="row g-2">
+                <div class="col-12">
+                  <canvas id="cpdProbChart" height="150"></canvas>
+                </div>
+                <div class="col-12">
+                  <canvas id="cpdModelChart" height="160"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card h-100">
+            <div class="card-body">
+              <h2 class="h6">Trades & Equity</h2>
+              <div class="row g-2">
+                <div class="col-12 col-lg-6">
+                  <canvas id="equityChart" height="120"></canvas>
+                </div>
+                <div class="col-12 col-lg-6">
+                  <pre id="tradeList" class="small">No trades in window.</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const runSelect = document.getElementById('runSelect');
+      const eventList = document.getElementById('eventList');
+      const statusEl = document.getElementById('status');
+      const eventsInfo = document.getElementById('eventsInfo');
+      const eventMeta = document.getElementById('eventMeta');
+      const tradeList = document.getElementById('tradeList');
+      const saveClipBtn = document.getElementById('saveClip');
+      let currentRun = null;
+      let selectedEvent = null;
+      let probChart = null;
+      let modelChart = null;
+      let equityChart = null;
+
+      const fmtNum = (value, digits = 2) => (Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—');
+
+      async function json(url, opts) {
+        const res = await fetch(url, opts);
+        if (!res.ok) {
+          throw new Error(`${res.status} ${res.statusText}`);
+        }
+        return res.json();
+      }
+
+      async function loadRuns() {
+        runSelect.innerHTML = '<option value="">(select run)</option>';
+        try {
+          const runs = await json('/api/runs');
+          runs.forEach((run) => {
+            const opt = document.createElement('option');
+            opt.value = run.id;
+            opt.textContent = run.id;
+            runSelect.appendChild(opt);
+          });
+          statusEl.textContent = `Loaded ${runs.length} runs.`;
+        } catch (e) {
+          statusEl.textContent = `Failed to load runs: ${e}`;
+        }
+      }
+
+      async function loadEvents() {
+        const runId = runSelect.value;
+        currentRun = runId || null;
+        selectedEvent = null;
+        resetCharts();
+        if (!runId) {
+          eventList.innerHTML = '';
+          eventsInfo.textContent = 'Select a run to view events.';
+          return;
+        }
+        eventsInfo.textContent = 'Loading events…';
+        const threshold = Number.parseFloat(document.getElementById('threshold').value) || 0.6;
+        const minSpacing = Number.parseInt(document.getElementById('spacing').value, 10) || 45;
+        try {
+          const events = await json(`/api/runs/${encodeURIComponent(runId)}/cpd/events?threshold=${threshold}&min_spacing=${minSpacing}&limit=200`);
+          renderEvents(events || []);
+        } catch (e) {
+          eventList.innerHTML = '';
+          eventsInfo.textContent = `Failed to load events: ${e}`;
+        }
+      }
+
+      function renderEvents(events) {
+        eventList.innerHTML = '';
+        if (!events.length) {
+          eventsInfo.textContent = 'No change-point events above threshold.';
+          return;
+        }
+        eventsInfo.textContent = `${events.length} event(s) detected.`;
+        events.forEach((event) => {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'list-group-item list-group-item-action event-row d-flex justify-content-between align-items-center';
+          item.innerHTML = `<span>${event.timestamp}</span><span class='badge bg-primary-subtle text-primary metric-pill'>${fmtNum(event.cp_prob,3)}</span>`;
+          item.addEventListener('click', () => selectEvent(event));
+          eventList.appendChild(item);
+        });
+      }
+
+      function resetCharts() {
+        if (probChart) { probChart.destroy(); probChart = null; }
+        if (modelChart) { modelChart.destroy(); modelChart = null; }
+        if (equityChart) { equityChart.destroy(); equityChart = null; }
+        eventMeta.textContent = 'Select an event.';
+        tradeList.textContent = 'No trades in window.';
+        saveClipBtn.disabled = true;
+      }
+
+      async function selectEvent(event) {
+        selectedEvent = event;
+        if (!currentRun || !event) return;
+        eventMeta.textContent = `Event at ${event.timestamp} · cp_prob ${fmtNum(event.cp_prob,3)}`;
+        saveClipBtn.disabled = false;
+        try {
+          const window = await json(`/api/runs/${encodeURIComponent(currentRun)}/cpd/event_window?timestamp=${encodeURIComponent(event.timestamp)}&seconds=60`);
+          renderEventWindow(window);
+        } catch (e) {
+          resetCharts();
+          eventMeta.textContent = `Failed to load window: ${e}`;
+        }
+      }
+
+      function renderEventWindow(window) {
+        const overlay = Array.isArray(window.series) ? window.series : [];
+        const models = Array.isArray(window.models) ? window.models : [];
+        const equity = Array.isArray(window.equity) ? window.equity : [];
+        const trades = Array.isArray(window.trades) ? window.trades : [];
+
+        const labels = overlay.map((row) => row.timestamp);
+        const cpProb = overlay.map((row) => Number(row.cp_prob || 0));
+        const runlen = overlay.map((row) => Number(row.runlen_expect ?? row.expected_runlen ?? 0));
+        const runlenMap = overlay.map((row) => Number(row.runlen_map ?? 0));
+
+        const probCtx = document.getElementById('cpdProbChart').getContext('2d');
+        const probDatasets = [
+          { label: 'cp_prob', data: cpProb, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.1)', pointRadius: 0, tension: 0.15, yAxisID: 'y' },
+          { label: 'runlen_expect', data: runlen, borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.12)', pointRadius: 0, tension: 0.15, yAxisID: 'y1' },
+        ];
+        const probOptions = {
+          responsive: true,
+          spanGaps: true,
+          scales: {
+            y: { beginAtZero: true, suggestedMax: 1, title: { display: true, text: 'cp_prob' } },
+            y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Run length' } },
+          },
+          plugins: { legend: { display: true }, tooltip: { mode: 'index', intersect: false } },
+        };
+        if (!probChart) {
+          probChart = new Chart(probCtx, { type: 'line', data: { labels, datasets: probDatasets }, options: probOptions });
+        } else {
+          probChart.data.labels = labels;
+          probChart.data.datasets = probDatasets;
+          probChart.update('none');
+        }
+
+        const modelCtx = document.getElementById('cpdModelChart').getContext('2d');
+        const modelNames = models.length ? Object.keys(models[0]).filter((key) => key !== 'timestamp') : [];
+        if (modelNames.length) {
+          const palette = [
+            '#2563eb', '#7c3aed', '#16a34a', '#f97316', '#dc2626', '#0ea5e9', '#facc15', '#14b8a6',
+          ];
+          const datasets = modelNames.map((name, idx) => ({
+            label: name,
+            data: models.map((row) => Number(row[name] ?? 0)),
+            borderColor: palette[idx % palette.length],
+            backgroundColor: palette[idx % palette.length] + '33',
+            fill: idx === 0 ? 'origin' : '-1',
+            pointRadius: 0,
+            tension: 0.2,
+            stack: 'models',
+          }));
+          const modelOptions = {
+            responsive: true,
+            scales: { y: { beginAtZero: true, max: 1, title: { display: true, text: 'Posterior weight' } } },
+            plugins: { legend: { display: true } },
+          };
+          if (!modelChart) {
+            modelChart = new Chart(modelCtx, { type: 'line', data: { labels: models.map((row) => row.timestamp), datasets }, options: modelOptions });
+          } else {
+            modelChart.data.labels = models.map((row) => row.timestamp);
+            modelChart.data.datasets = datasets;
+            modelChart.update('none');
+          }
+        } else if (modelChart) {
+          modelChart.destroy();
+          modelChart = null;
+        }
+
+        const equityCtx = document.getElementById('equityChart').getContext('2d');
+        const equityLabels = equity.map((row) => row.timestamp || '');
+        const equityData = equity.map((row) => Number(row.equity ?? 0));
+        const equityOptions = {
+          responsive: true,
+          scales: { y: { beginAtZero: false, title: { display: true, text: 'Equity' } } },
+          plugins: { legend: { display: false } },
+        };
+        if (!equityChart) {
+          equityChart = new Chart(equityCtx, { type: 'line', data: { labels: equityLabels, datasets: [{ data: equityData, borderColor: '#334155', backgroundColor: 'rgba(51,65,85,0.12)', tension: 0.2, pointRadius: 0 }] }, options: equityOptions });
+        } else {
+          equityChart.data.labels = equityLabels;
+          equityChart.data.datasets[0].data = equityData;
+          equityChart.update('none');
+        }
+
+        if (trades.length) {
+          const lines = trades.map((trade) => `${trade.entry_time || ''} → ${trade.exit_time || ''} · ${trade.side || ''} · pnl ${fmtNum(trade.pnl, 2)}`);
+          tradeList.textContent = lines.join('\n');
+        } else {
+          tradeList.textContent = 'No trades in window.';
+        }
+      }
+
+      saveClipBtn.addEventListener('click', async () => {
+        if (!currentRun || !selectedEvent) return;
+        saveClipBtn.disabled = true;
+        saveClipBtn.textContent = 'Saving…';
+        try {
+          const payload = {
+            timestamp: selectedEvent.timestamp,
+            cp_prob: selectedEvent.cp_prob,
+            runlen_expect: selectedEvent.runlen_expect,
+          };
+          await fetch(`/api/runs/${encodeURIComponent(currentRun)}/cpd/clip`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          saveClipBtn.textContent = 'Saved';
+        } catch (e) {
+          saveClipBtn.textContent = 'Error';
+        } finally {
+          setTimeout(() => { saveClipBtn.textContent = 'Save Clip'; saveClipBtn.disabled = false; }, 1500);
+        }
+      });
+
+      document.getElementById('loadEvents').addEventListener('click', loadEvents);
+      runSelect.addEventListener('change', loadEvents);
+
+      loadRuns();
+    </script>
+  </body>
+</html>

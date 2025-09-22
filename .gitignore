@@ -6,7 +6,8 @@ __pycache__/
 *.sqlite
 *.log
 
-scripts/*
+scripts/**
+!scripts/cpd_extract.py
 *.sh
 *.py
 !scripts/cpd_extract.py
