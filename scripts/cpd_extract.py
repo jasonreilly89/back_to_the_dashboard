@@ -10,8 +10,12 @@ import numpy as np
 import pandas as pd
 
 
+def _coerce_timestamp(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, utc=True, errors="coerce")
+
+
 def _normalise_timestamp(series: pd.Series) -> pd.Series:
-    ts = pd.to_datetime(series, utc=True, errors="coerce")
+    ts = _coerce_timestamp(series)
     if ts.dt.tz is None:
         ts = ts.dt.tz_localize("UTC")
     else:
@@ -20,9 +24,14 @@ def _normalise_timestamp(series: pd.Series) -> pd.Series:
 
 
 def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
     try:
-        if value is None or (isinstance(value, float) and np.isnan(value)):
+        if pd.isna(value):  # type: ignore[arg-type]
             return None
+    except TypeError:
+        pass
+    try:
         return float(value)
     except (TypeError, ValueError):
         return None
@@ -30,40 +39,49 @@ def _safe_float(value: Any) -> float | None:
 
 def _safe_int(value: Any) -> int | None:
     try:
-        if value is None:
+        if pd.isna(value):  # type: ignore[arg-type]
             return None
+    except TypeError:
+        pass
+    try:
         return int(value)
     except (TypeError, ValueError):
         return None
 
 
 def _normalise_models(df: pd.DataFrame) -> tuple[list[str], np.ndarray]:
-    model_cols = [col for col in df.columns if col.startswith("model_post_")]
-    if model_cols:
-        names = [col.replace("model_post_", "") for col in model_cols]
-        values = df[model_cols].to_numpy(dtype=float, copy=False)
+    model_columns = [col for col in df.columns if col.startswith("model_post_")]
+    if model_columns:
+        names = [col.replace("model_post_", "") for col in model_columns]
+        values = df[model_columns].to_numpy(dtype=float, copy=False)
         return names, values
 
     if "model_post" not in df.columns:
         return [], np.empty((len(df), 0))
 
     names: list[str] = []
-    matrix = np.zeros((len(df), 0))
-    rows = []
+    posts = []
     for entry in df["model_post"]:
         entry = entry or {}
         if isinstance(entry, dict):
             for key in entry.keys():
                 if key not in names:
                     names.append(key)
-            rows.append(entry)
+            posts.append(entry)
         else:
-            rows.append({})
-    matrix = np.zeros((len(rows), len(names)), dtype=float)
-    for row_idx, entry in enumerate(rows):
+            posts.append({})
+    matrix = np.zeros((len(posts), len(names)), dtype=float)
+    for row_idx, entry in enumerate(posts):
         for col_idx, name in enumerate(names):
             matrix[row_idx, col_idx] = float(entry.get(name, 0.0))
     return names, matrix
+
+
+def _detect_log_column(df: pd.DataFrame) -> str | None:
+    for candidate in ("logpred", "log_pred", "logPred"):
+        if candidate in df.columns:
+            return candidate
+    return None
 
 
 def extract_series(df: pd.DataFrame, downsample: int) -> list[dict[str, Any]]:
@@ -71,12 +89,7 @@ def extract_series(df: pd.DataFrame, downsample: int) -> list[dict[str, Any]]:
         df = df.iloc[::downsample, :].copy()
     df = df.sort_values("timestamp")
     timestamps = _normalise_timestamp(df["timestamp"])
-    log_col = None
-    for candidate in ("logpred", "log_pred", "logPred"):
-        if candidate in df.columns:
-            log_col = candidate
-            break
-
+    log_col = _detect_log_column(df)
     records: list[dict[str, Any]] = []
     for idx, ts in enumerate(timestamps):
         row = df.iloc[idx]
@@ -99,10 +112,11 @@ def extract_models(df: pd.DataFrame, downsample: int) -> list[dict[str, Any]]:
     df = df.sort_values("timestamp")
     timestamps = _normalise_timestamp(df["timestamp"])
     names, matrix = _normalise_models(df)
-
     records: list[dict[str, Any]] = []
     for idx, ts in enumerate(timestamps):
-        payload = {"timestamp": ts.isoformat() if not pd.isna(ts) else None}
+        payload: dict[str, Any] = {
+            "timestamp": ts.isoformat() if not pd.isna(ts) else None,
+        }
         for col_idx, name in enumerate(names):
             payload[name] = float(matrix[idx, col_idx])
         records.append(payload)
@@ -115,7 +129,6 @@ def extract_summary(df: pd.DataFrame) -> dict[str, Any]:
     cp_prob = df["cp_prob"].astype(float) if "cp_prob" in df.columns else pd.Series(dtype=float)
     runlen_col = "runlen_expect" if "runlen_expect" in df.columns else "expected_runlen"
     runlen = df[runlen_col].astype(float) if runlen_col in df.columns else pd.Series(dtype=float)
-
     names, matrix = _normalise_models(df)
     model_means = {name: float(matrix[:, idx].mean()) for idx, name in enumerate(names)} if names else {}
 
